@@ -119,7 +119,8 @@ Right after `agy_start`, run the `wait_cmd` string that `agy_start` returned as 
 It exits when the job leaves `running` (done, stalled, failed) and prints the compact
 status; the harness wakes you once with that output. Meanwhile do other orchestration work
 or end your turn — no `agy_wait` loop, no polling. Use `agy_wait`/`agy_status` only for a
-single look when the user asks how it is going. Intervene when the result shows:
+single look when the user asks how it is going. To watch it themselves, give the user the
+`wait_cmd` path with `watch <job>` instead of `wait <job>` (live step list in their own terminal). Intervene when the result shows:
 - `alert: edits outside allowed_files` (the waiter exits early for this) → `agy_cancel`, audit, decide;
 - `stalled` (no event for 5 min) → `agy_cancel`, read `stderr`; Argon thinking quietly for a
   few minutes is normal, a Flash stall usually is not;

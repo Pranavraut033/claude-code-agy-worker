@@ -155,7 +155,7 @@ def _parse(m):
             if s and s.get("step_type") == "tool":
                 params = (s.get("tool_info") or {}).get("parameters") or {}
                 target = params.get("TargetFile") or params.get("AbsolutePath") or \
-                    params.get("CommandLine") or ""
+                    params.get("CommandLine") or params.get("Url") or params.get("query") or ""
                 steps.append({"round": r["n"], "tool": s.get("tool_name"), "state": s.get("state"),
                               "target": target})
                 if s.get("state") == "DONE":
@@ -286,7 +286,8 @@ def _short(m, target):
     t = str(target)
     if "/.system_generated/" in t:  # agy reading back a page it fetched
         return "(fetched page)"
-    return str(_rel(m, t))[-80:]
+    t = str(_rel(m, t))
+    return t[-80:] if t.startswith(("/", ".")) else t[:80]  # paths: keep the tail; urls, queries: the head
 
 
 def _abs(m, p):
@@ -319,7 +320,9 @@ def agy_status(job: str | None = None, steps: int = 5, full_report: bool = False
     if not full_report and len(report) > 1500:
         report = report[:1500] + " …[truncated: agy_status(full_report=True)]"
     done_steps = [x for x in st if x["state"] != "ACTIVE"]
-    out = {"job": job, "state": state, "round": n, "elapsed_s": round(time.time() - r["started"]),
+    took = (result or {}).get("duration_seconds")  # cumulative over rounds; wall clock while running
+    out = {"job": job, "state": state, "round": n,
+           "elapsed_s": round(took) if took else round(time.time() - r["started"]),
            "n_steps": len(done_steps),
            "steps": [f'{x["tool"]} {x["state"].lower()} {_short(m, x["target"])}'
                      for x in done_steps[-steps:]],
@@ -512,11 +515,45 @@ def wait_cli(job, max_s=7200):
     print(json.dumps(agy_status(job), indent=1))
 
 
+def watch_cli(job=None):
+    """`server.py watch [job]`: follow a job live for a human, one line per finished tool step
+    (green done, red error), then its final report. No job: the newest one. Read-only.
+    ponytail: re-parses the round logs every 2 s; fine for logs of a few MB."""
+    if job is None:
+        ids = sorted(p.name for p in JOBS.iterdir() if p.is_dir()) if JOBS.exists() else []
+        if not ids:
+            sys.exit(f"no jobs in {JOBS}")
+        job = ids[-1]  # ids start with %m%d-%H%M%S, so the last is the newest
+    m, tty, shown, live = _load(job), sys.stdout.isatty(), 0, False
+    print(f"job {job} · {m['model']} · {m['cwd']}\n{m['brief'][:160].strip()}…\n", flush=True)
+    while True:
+        m = _load(job)  # agy_resume adds rounds
+        _, _, st, _, result = _parse(m)
+        done = [x for x in st if x["state"] != "ACTIVE"]
+        for x in done[shown:]:
+            line = f'{time.strftime("%H:%M:%S") if live else "  ·     "}  {x["tool"]:<26} {_short(m, x["target"])}'
+            c = {"DONE": "32", "ERROR": "31"}.get(x["state"], "0")
+            print(f"\033[{c}m{line}\033[0m" if tty else line, flush=True)
+        shown, live = len(done), True
+        state = "cancelled" if m.get("cancelled") else _state(m, result)
+        if state != "running":
+            s = agy_status(job, full_report=True)
+            print(f"\n{state.upper()} · round {s['round']} · {s['elapsed_s']} s · tokens {s['tokens']}"
+                  f" · denied {s['denied'] or 'none'}\n\n{s['report'] or s.get('hint') or s.get('stderr') or ''}")
+            return
+        time.sleep(2)
+
+
 if __name__ == "__main__":
     if sys.argv[1:] == ["selftest"]:
         selftest()
     elif sys.argv[1:] == ["usage"]:
         print(json.dumps(agy_usage(), indent=1))
+    elif sys.argv[1:2] == ["watch"]:
+        try:
+            watch_cli(sys.argv[2] if len(sys.argv) > 2 else None)
+        except KeyboardInterrupt:
+            pass
     elif sys.argv[1:2] == ["wait"]:
         wait_cli(sys.argv[2], int(sys.argv[3]) if len(sys.argv) > 3 else 7200)
     else:
