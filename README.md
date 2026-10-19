@@ -6,7 +6,7 @@
 
 A Claude Code plugin that hands long, multi-task work packages to the Antigravity CLI (`agy`) and audits every change it makes.
 
-![version](https://img.shields.io/badge/version-0.1.1-blue) [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE) ![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-D97757?logo=anthropic&logoColor=white) ![Antigravity CLI](https://img.shields.io/badge/Antigravity_CLI-1.4.2-4285F4?logo=google&logoColor=white) ![MCP](https://img.shields.io/badge/MCP-server-8A2BE2) ![python](https://img.shields.io/badge/python-3.10%2B_·_uv-3776AB?logo=python&logoColor=white) ![platform](https://img.shields.io/badge/tested_on-macOS-lightgrey?logo=apple)
+![version](https://img.shields.io/badge/version-0.1.2-blue) [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE) ![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-D97757?logo=anthropic&logoColor=white) ![Antigravity CLI](https://img.shields.io/badge/Antigravity_CLI-1.4.2-4285F4?logo=google&logoColor=white) ![MCP](https://img.shields.io/badge/MCP-server-8A2BE2) ![python](https://img.shields.io/badge/python-3.10%2B_·_uv-3776AB?logo=python&logoColor=white) ![platform](https://img.shields.io/badge/tested_on-macOS-lightgrey?logo=apple)
 
 </div>
 
@@ -34,7 +34,7 @@ sequenceDiagram
 - **Long work packages, not one-line edits**: Sized for 10–60 minutes of worker runtime so startup overhead is amortised effectively across multiple tasks.
 - **In-place edits with snapshot diff/revert**: Works directly in the repository without isolated git worktrees, protected by an independent git snapshot.
 - **Clear division of labor**: Claude keeps the judgment, architecture, and auditing; agy does the mechanical work.
-- **Token-thrifty**: Preserves turn budgets and context windows using a background waiter, compact status, and tiered diff audits.
+- **Lean on Claude's side**: background waiter, compact status and tiered diff audits keep orchestration cheap — it pays off on large packages, not small edits (see [Benchmark](#-benchmark)).
 
 ## 🚀 Quick start
 
@@ -82,6 +82,19 @@ Then just ask:
 - **`gemini-4-argon-medium`**: Recommended for open-ended research legwork, transcription, or complex verification; draws from a limited weekly quota pool.
 
 Check quota for free with `agy -p "/usage"` (or the `agy_usage` tool). Full per-model notes and timings: [models.md](skills/agy/references/models.md).
+
+## 📊 Benchmark
+
+Small tasks, measured 2026-10-19: Claude alone vs Claude orchestrating agy (`gemini-3.8-flash-medium`), Sonnet subagents, hidden checks, n = 1 per cell.
+
+| Task | Claude tokens (alone → with agy) | Wall time | Hidden checks |
+|---|---|---|---|
+| Rename across 6 files | 81k → 101k | 7 s → 135 s | 4/4 both |
+| CSV feature from a spec | 96k → 116k | 19 s → 190 s | 6/6 both |
+| Fix 3 planted bugs | 86k → 103k | 14 s → 211 s | 5/5 both |
+| **Total** | **264k → 319k (+21 %)** | **40 s → 536 s** | **15/15 both** |
+
+On small tasks agy **costs** Claude tokens: orchestration (brief, permissions, wait, audit) outweighs the edit it replaces. The skill therefore keeps small work in Claude ("too small for agy") and sends agy the large packages. A large-package benchmark is next.
 
 ## 📚 More
 

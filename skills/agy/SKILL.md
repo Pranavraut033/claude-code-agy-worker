@@ -1,6 +1,6 @@
 ---
 name: agy
-description: Run the Antigravity CLI (agy) as an agentic worker through the agy-worker MCP server — this session plans the work into multi-task work packages, briefs agy, monitors long runs (minutes to an hour), audits every package and steers follow-up rounds. Use when the user says /agy, "hand this to agy/Antigravity/Gemini", or wants a body of mechanical work done by agy — building or updating many files, scaffolding records, applying a spec across a codebase, research legwork (search, download, transcribe), multi-step pipelines with checks. Not for a single one-line edit (fold it into the next package) and not for decisions — those stay with this session.
+description: Run the Antigravity CLI (agy) as an agentic worker through the agy-worker MCP server — this session plans the work into multi-task work packages, briefs agy, monitors long runs (minutes to an hour), audits every package and steers follow-up rounds. Use when the user says /agy, "hand this to agy/Antigravity/Gemini", or wants a body of mechanical work done by agy — building or updating many files, scaffolding records, applying a spec across a codebase, research legwork (search, download, transcribe), multi-step pipelines with checks. Not for small tasks this session can finish in a handful of tool calls (agy costs more there — see "Too small for agy") and not for decisions — those stay with this session.
 ---
 
 # /agy — Claude orchestrates, agy works, Claude audits
@@ -8,7 +8,8 @@ description: Run the Antigravity CLI (agy) as an agentic worker through the agy-
 **Roles are fixed.** This session is the eyes and brain: it plans, splits work into
 packages, writes briefs, monitors, audits and decides. agy is the hands and legs: every
 mechanical step — editing code and files, writing records, scaffolding, running checks,
-research legwork (searching, downloading, transcribing) — goes to agy. The session does
+research legwork (searching, downloading, transcribing) — goes to agy, unless it is too small
+for agy (below). The session does
 not hand-edit files agy could edit and does not spawn Claude subagents for that work. It
 still reads files and runs checks to audit. If agy fails a package twice, report to the
 user and ask before doing it yourself. Exception: files under `~/.claude/` (skills, MCP
@@ -23,6 +24,20 @@ server is not connected (check `/mcp`; the plugin's server needs `uv` on PATH).
 can plan, read, edit, run checks and iterate on its own for an hour. Give it a *work
 package*: a coherent chunk of a phase — several related tasks across many files, with
 checks — not one file. A lone one-line change rides along in the next package.
+
+**Too small for agy — do it directly.** A measured benchmark (3 small tasks, n=1): routing them
+through agy cost **+21 % Claude tokens, ×2.4 cumulative input and ×13 wall time** for the same
+quality, because orchestration takes ~11 tool calls (brief, permissions, wait, diff, checks,
+cleanup) and the task alone took 2–5. So, before any `agy_start`:
+- **Estimate the direct cost:** how many tool calls would this session need to just do it?
+  Under ~10 (a rename, a few-file feature, a contained bug fix) → do it yourself, or hold it
+  for the next package if one is coming soon anyway.
+- **Use agy when** the work is many files or many steps (roughly 20+ direct tool calls), long
+  research legwork, long-running commands (renders, test suites, downloads) that agy can sit on
+  while this session does other work, or reading volume this session should not load into its
+  own context.
+- When a user rule says "agy does all mechanical work", still mention it when a task is below
+  the line and say what you did.
 
 ## 1. Plan the work into packages
 
