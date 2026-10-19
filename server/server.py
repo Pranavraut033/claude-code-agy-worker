@@ -175,6 +175,8 @@ def _parse(m):
 
 
 def _state(m, result):
+    if result is not None:
+        return "done" if result.get("status") == "SUCCESS" else "failed"
     if _alive(m):
         last = max((JOBS / m["id"]).glob("r*.jsonl"), key=os.path.getmtime)
         quiet = time.time() - os.path.getmtime(last)
@@ -184,9 +186,7 @@ def _state(m, result):
                 return "running"  # one long command emits no events while it runs
             return "stalled"
         return "running"
-    if result is None:
-        return "failed"
-    return "done" if result.get("status") == "SUCCESS" else "failed"
+    return "failed"
 
 
 def _allowed(m, path):
@@ -491,6 +491,7 @@ def selftest():
         old_t = time.time() - STALL_S - 10
         os.utime(p_cmd, (old_t, old_t))
         assert _state(m_cmd, None) == "running"
+        assert _state(m_cmd, {"status": "SUCCESS"}) == "done"
     u = _parse_usage("Gemini Models\tWeekly Limit Remaining\t59%\t2999-01-01T00:00:00Z\njunk\n")
     assert len(u) == 1 and u[0]["left_pct"] == 59 and u[0]["resets_in_h"] > 0, u
     print("selftest ok")
