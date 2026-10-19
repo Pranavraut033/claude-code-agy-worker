@@ -114,7 +114,53 @@ What the numbers say together:
 So we added a **"too small for agy"** rule to the skill: if Claude would need fewer than ~10 tool
 calls, it does the work itself.
 
-## 6. Where the savings might really be
+## 6. Real use: 22 jobs in three projects
+
+Benchmarks are tidy; real work is not. Three working sessions kept logs while using agy for
+actual project work (an animated episode's audio and render pipeline, a ~1,000-line animation scene,
+and a documentary pipeline with records, voices and checks). Together: **22 jobs, ~5.5 hours of agy
+time, ~4.4M Gemini tokens**.
+
+| | Count |
+|---|---|
+| Clean on the first try | 7 of 22 |
+| Clean after fix-up rounds | 2 |
+| **Ended by a denied command** | **8 of 22** (one after all the work was done) |
+| Lost to a provider 503 | 2 |
+| Out-of-scope edits by agy | 0 |
+| False "done" claims | 2 (one fix that wasn't, one "verified" render with visible defects) |
+
+**Where it paid off:** long packages that are mostly *waiting* — four sequential renders (37 min,
+clean, two orchestrator turns), a 12-command build-and-install chain; applying a detailed spec to a
+large file (a 700-line scene in 11 minutes, exact to the spec); record work with a machine check
+(28 JSON edits plus a verifier, nothing to fix). In these, the orchestrator really did spend only a
+couple of turns while agy worked for half an hour.
+
+**Where it did not:**
+
+- **Denials, again.** Almost every one was a small, *improvised variant* of an allowed command:
+  `python3 -c`, a `| sort` or `| awk` on the end, `sed -n`, an extra `--selftest` flag. One job
+  finished all its work in 36 minutes, then died on a read-only check and left no report.
+- **Plain rules match whole words.** A rule for `--only=g` did not cover `--only=g07-…`; two jobs
+  died on it before a regex rule fixed it.
+- **agy cannot see.** It called 8-pixel labels, overlapping text and an oversized character
+  "verified". Every visual defect was found by Claude reading the contact sheet.
+- **Thrash without a timebox.** 56 minutes and ~25 identical check runs on one label bug, ending in
+  a false "done". Claude found the root cause in five minutes by reading the code.
+- **Small work.** Retiles, re-runs and one-line edits took the orchestrator a couple of minutes by
+  hand; as agy jobs they cost a cold start, a brief and a 10–40 minute wait.
+- **Orchestrator mistakes counted too:** briefs with conflicting rules, a fact sheet missing the rows
+  the brief referenced, a script needing a virtualenv that a permission rule cannot provide.
+
+**What changed because of it (v0.1.5):** the guard now demands exact command lines (no pipes, no
+`-c`, no extra flags), foreground-only commands, at most two attempts per defect, and never
+"verified" for visual output. `agy_permissions(check=[…])` tests a brief's command lines against
+the allow-list *before* the job starts; `agy_status` names the denied command and reports each
+job's quota drop. The skill adds a pre-flight step (run the generators and checkers on a sample
+before briefing) and says plainly: the orchestrator judges every visual, and takes over a defect
+agy has failed twice.
+
+## 7. Where the savings might really be
 
 We asked agy to research cheaper orchestration (report: [`docs/research/cheaper-orchestration.md`](docs/research/cheaper-orchestration.md)).
 We verified the flags it names against `claude --help`; community claims in it are marked as such
@@ -138,7 +184,7 @@ And the task types still untested, where agy's design should fit best:
 - **reading-heavy research**, where agy reads hundreds of pages and Claude reads a summary (still
   spot-checked — agy's first research report had two load-bearing errors).
 
-## 7. Principles we ended up with
+## 8. Principles we ended up with
 
 - **Measure before claiming.** Our intuition ("offloading saves tokens") was wrong twice.
 - **Never trust a worker's report** — code or research. Audit in tiers; check the claims you act on.
@@ -147,7 +193,7 @@ And the task types still untested, where agy's design should fit best:
 - **Write down what surprised you** — [`skills/agy/references/models.md`](skills/agy/references/models.md)
   is a growing per-model log of timings and quirks.
 
-## 8. Help wanted
+## 9. Help wanted
 
 If you have run a Claude-orchestrates-a-cheaper-agent setup and found it **does** save tokens,
 we would love to know what was different: task type, orchestrator setup, model, numbers. Issues

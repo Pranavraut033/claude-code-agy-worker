@@ -121,9 +121,22 @@ Don't spend it on packages Flash can do — the weekly quota is limited.
 | 2026-10-19 | flash-medium | clip_sfx.py + mix.sh | 77 s | 12 | clip_sfx ok; mix.sh failed: system python3 has no numpy (script needs .venv/bin on PATH, a rule prefix cannot carry env vars) |
 | 2026-10-19 | flash-high | package: build plugin repo (copy 3 files, 3 server fixes + selftest, scrub docs, manifests, README) | 547 s | 56 | all 8 tasks done; denied on the last check (`grep … \| awk` pipe) → no report; audit passed |
 | 2026-10-19 | flash-medium | fix-up as fresh job: simplify one function + 6 README edits ("no pipes" in brief) | 114 s | 19 | clean, no denials |
+| 2026-10-19 | flash-medium | 12-command build + install chain (rule `--only=g` too narrow) | 363 s, 348 s | – | **denied twice**: plain rules match whole words; fixed with a regex rule |
+| 2026-10-19 | flash-medium | same chain, regex rule | ~840 s | – | clean, 68k tokens |
+| 2026-10-19 | flash-high | package: build a 700-line scene from a reference + spec, 2 smoke renders | 649 s | 35 | good; data claims verified true; 626k tokens |
+| 2026-10-19 | flash-high | same, round 2: fixes + new sets, 1 render | ~900 s | 91 | mixed: called unreadable labels/overlaps "verified" — agy cannot judge visuals |
+| 2026-10-19 | flash-high | same, round 3: 9 fixes + 2 renders | ~650 s | 128 | 8/9 landed; round ended on a denied `sed -n` after the work |
+| 2026-10-19 | flash-high | fresh job: 4 narrow visual fixes + 1 render | **3363 s** | 82 | 3/4; reported one fix done that was not; ~25 repeated checks, read library sources — thrash, no timebox |
+| 2026-10-19 | flash-high | records package: 28 JSON edits, case file, ledger, verifier | 18 min | 112 | clean, nothing to fix; 398k tokens |
+| 2026-10-19 | flash-high | build a 20-beat JSON from a script + lint | 12 min | 49 | 0 edits: denied `python3 -c`, then a 503 |
+| 2026-10-19 | flash-high | same, durations pre-computed, "no interpreter" in brief | ~25 min, 3 rounds | 82+ | done after 2 fix-ups; brief had a rule conflict the scorer exposed |
+| 2026-10-19 | flash-high | new feature in a checker + 2 selftests + JSON edits | 17.5 min | 60 | clean; wrote extra selftests unprompted |
+| 2026-10-19 | flash-high | rewords + local TTS + alignment (long commands) | 36 min | 31 | work done, then denied on a `\| sort` check → no report |
+| 2026-10-19 | flash-high | add a CLI flag, re-level, retile | 40 min | 12 | task 1 only; denied `--selftest` (only another subcommand granted) |
 
 ## Changelog
 
 - 2026-10-19: created — gemini-3.8-flash, gemini-4-argon; shared headless facts; 7 timing rows.
 - 2026-10-19: recipes reframed for multi-task work packages (skill now briefs packages, not single edits); server default timeout 3600 s, stall 300 s.
 - 2026-10-19: quota visibility — `agy_usage()` tool, `quota_low` on agy_start, skill budgets Argon by % left; record quota drop per notable job (baseline: Gemini weekly 59%, Argon weekly 31%).
+- 2026-10-20: 12 rows from three real project sessions (22 jobs). Patterns: denials ended 8 of 22 jobs, almost all improvised variants of allowed commands (`python3 -c`, pipes, an extra flag); agy cannot judge visual output; one 56-min thrash on a single defect. → v0.1.5 guard (exact commands, no pipes, foreground only, 2 attempts per defect, never "verified" for visuals), `agy_permissions(check=…)`, denied command named in status, per-job quota drop.

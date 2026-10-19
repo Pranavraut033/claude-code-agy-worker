@@ -81,7 +81,18 @@ don't repeat those. Structure the brief (one delimiter style: Markdown headings)
   guard tells agy to open it with a ≤10-line summary and keep its final message terse.
 - `allowed_files`: every file or directory the package may touch — directories are fine
   for a package (`docs/records/`), list single files where scope is tight.
-- Name every command the tasks need, and grant them first (§3).
+- Name every command the tasks need **as exact command lines**, and grant them first (§3).
+  Commands that need an environment (a venv, `PATH`) must name it in the line itself
+  (`.venv/bin/python3 tools/x.py`), because a rule cannot carry env vars.
+- **Pre-flight before briefing:** run each generator, scorer or verifier the package depends on
+  once against a sample item, and check that every numbers file the brief points at covers every
+  table it asks agy to fill. Session logs: a conflicting scorer rule, a crashed generator and a
+  fact sheet missing rows each cost a whole job.
+- **Carry hard-won rules in the brief.** When a bug cost time, add a short "rules that cost
+  hours" block (the trap, and what to do instead) to every later brief in that area; agy then
+  does not repeat it. Give numbers, not adjectives ("labels ≥ 28 px tall at 720p", not "bigger").
+- **Timebox fix-ups:** `timeout_s` ≈ 3× the work you expect (900–1200 s for a few narrow fixes);
+  the guard already caps agy at 2 attempts per defect.
 - Model: **read `references/models.md` first** — per model, how to prompt it, how long it
   takes, how it misbehaves; it grows as models change. Short version: Flash
   (`gemini-3.8-flash-medium`/`-high`) for well-specified packages; Argon
@@ -108,7 +119,10 @@ starting. Rules are plain prefixes, `*` is literal: `command(python3 -m pytest)`
 alternatives via `command(regex:npm run (build|lint))`. A read-only baseline (`ls`, `cat `,
 `grep `, `git status`/`diff`/`log`/`show`, …) stays permanently. Never `command(*)`, a bare
 interpreter, `rm`, `sleep`, `curl`, `git push`, package managers, or
-`--dangerously-skip-permissions`. Remove one-off rules after the package. After a denial:
+`--dangerously-skip-permissions`. **Before `agy_start`, run `agy_permissions(check=[…])` on every
+command line the brief names** — each piece of a pipe or `&&` chain needs its own rule, and a plain
+rule matches whole words only (`--only=g` does not cover `--only=g07-…`; use the regex form for a
+family). Remove one-off rules after the package. After a denial (`denied` names the command):
 grant the rule (or forbid the action in the brief) and **start a new job** with the same
 brief — `agy_status` shows a `hint`; resuming a denial-ended conversation has wedged.
 
@@ -124,7 +138,9 @@ single look when the user asks how it is going. To watch it themselves, give the
 - `alert: edits outside allowed_files` (the waiter exits early for this) → `agy_cancel`, audit, decide;
 - `stalled` (no event for 5 min) → `agy_cancel`, read `stderr`; Argon thinking quietly for a
   few minutes is normal, a Flash stall usually is not;
-- the same error repeats in its steps (looping) → cancel and re-brief;
+- the same error repeats in its steps (looping), or the same check runs again and again →
+  cancel; if it is the same defect agy already failed twice, fix it yourself (session logs:
+  56 agy-minutes on one label bug that took the orchestrator 5 minutes once it read the code);
 - `failed` → read `stderr` (auth, 429/503, timeout) and retry once if transient; a quota
   or "AI credits balance is too low" error is not transient → `agy_usage()`, then switch
   model family or wait for the reset it shows.
@@ -142,8 +158,14 @@ Audit in tiers — the expensive reading goes where errors would hurt:
      of every new pattern.
    - **Spot-check:** repeated instances of a pattern already verified once — read 1 in 5,
      plus any file whose size in `stat` looks off.
-   - **Skip reading:** generated outputs a checker already validated (OCR json, logs,
-     renders) — trust the checker, not agy's word.
+   - **Skip reading:** generated outputs a checker already validated (OCR json, logs) —
+     trust the checker, not agy's word.
+   - **Visual output is always yours to judge.** agy cannot see: it has called unreadable
+     8 px labels, overlaps and oversized characters "verified", and once reported a fix done that
+     the re-render showed still broken. Look at every contact sheet / frame yourself.
+   - **A denial-ended or interrupted round has no report**, but its work may be complete
+     (one job finished everything in 36 min, then died on a read-only check). Audit the diff and
+     files before re-running anything.
 3. **Long reports:** read the summary at the top; open the body only where the summary
    flags something or a claim is load-bearing.
 
@@ -152,6 +174,13 @@ Audit in tiers — the expensive reading goes where errors would hurt:
 Problems → `agy_resume(job, message)` with numbered, specific fixes covering *all* findings
 at once. After 2 rounds still wrong → `agy_discard` what is worse than nothing, report to
 the user, ask before doing it yourself.
+
+**Where agy has paid off in real use** (three session logs, 22 jobs): long packages that are mostly
+waiting — sequential renders and build/install chains (a 37-min render package ran clean, two
+orchestrator turns); applying a detailed spec to a large file (a 700-line scene built in 11 min);
+record work with a machine check (28 JSON edits + verifier, clean). **Where it did not:** short edits,
+re-runs and retiles (minutes by hand), small visual fixes, and anything whose command set was not
+granted exactly.
 
 ## Token discipline (both sides)
 

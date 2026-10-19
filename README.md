@@ -6,7 +6,7 @@
 
 A Claude Code plugin that hands long, multi-task work packages to the Antigravity CLI (`agy`) and audits every change it makes.
 
-![version](https://img.shields.io/badge/version-0.1.4-blue) [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE) ![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-D97757?logo=anthropic&logoColor=white) ![Antigravity CLI](https://img.shields.io/badge/Antigravity_CLI-1.4.2-4285F4?logo=google&logoColor=white) ![MCP](https://img.shields.io/badge/MCP-server-8A2BE2) ![python](https://img.shields.io/badge/python-3.10%2B_·_uv-3776AB?logo=python&logoColor=white) ![platform](https://img.shields.io/badge/tested_on-macOS-lightgrey?logo=apple)
+![version](https://img.shields.io/badge/version-0.1.5-blue) [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE) ![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-D97757?logo=anthropic&logoColor=white) ![Antigravity CLI](https://img.shields.io/badge/Antigravity_CLI-1.4.2-4285F4?logo=google&logoColor=white) ![MCP](https://img.shields.io/badge/MCP-server-8A2BE2) ![python](https://img.shields.io/badge/python-3.10%2B_·_uv-3776AB?logo=python&logoColor=white) ![platform](https://img.shields.io/badge/tested_on-macOS-lightgrey?logo=apple)
 
 **📖 New here? Read [the journey](JOURNEY.md)** — why we built this, what broke, and what the benchmarks really showed.
 
@@ -74,7 +74,7 @@ A header panel, one line per step with an icon (📄 read · ✎ edit · ▶ com
 | `agy_resume` | Fix-up round: send a message to the same agy conversation. |
 | `agy_cancel` | Kill a running job and terminate its process group. |
 | `agy_discard` | Restore files from the pre-job snapshot; delete agy-created files. |
-| `agy_permissions` | Read or edit agy's headless command and URL allow-list. |
+| `agy_permissions` | Read or edit agy's allow-list; `check=[…]` tests a brief's commands first. |
 | `agy_usage` | Check remaining 5-hour and weekly quota pools and reset times. |
 
 ## 🛡️ Safety
@@ -105,7 +105,7 @@ Small tasks, measured 2026-10-19: Claude alone vs Claude orchestrating agy (`gem
 | **Total** | **264k → 319k (+21 %)** | **40 s → 536 s** | **15/15 both** |
 | Large package: 40-file API migration + type hints | 91k → 107k (+17 %) | 38 s → 1,050 s | 6/6 both |
 
-So far agy **costs** Claude tokens: orchestration (brief, permissions, wait, audit) has a fixed cost of ~100k, and Claude alone is very cheap at anything it can script — in the large benchmark it wrote one regex script and finished in 7 tool calls. The skill therefore keeps small work in Claude ("too small for agy"). Untested so far: work Claude can't script, and reading-heavy research. Plans, fixtures, checks and raw numbers: [`benchmarks/`](benchmarks/); the full story: [JOURNEY.md](JOURNEY.md).
+So far agy **costs** Claude tokens: orchestration (brief, permissions, wait, audit) has a fixed cost of ~100k, and Claude alone is very cheap at anything it can script — in the large benchmark it wrote one regex script and finished in 7 tool calls. The skill therefore keeps small work in Claude ("too small for agy"). Untested so far: work Claude can't script, and reading-heavy research. Plans, fixtures, checks and raw numbers: [`benchmarks/`](benchmarks/); the full story, including 22 jobs of real project use: [JOURNEY.md](JOURNEY.md).
 
 ## 📚 More
 

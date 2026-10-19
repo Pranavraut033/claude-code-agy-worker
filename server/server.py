@@ -16,7 +16,7 @@ object through a throwaway index (HEAD, branch and the real index are never touc
 agy_diff shows exactly what changed and agy_discard can put agy's files back.
 Job state lives on disk under $AGY_WORKER_HOME/jobs, so jobs outlive a server restart.
 """
-import fnmatch, json, os, shutil, signal, subprocess, sys, tempfile, time, uuid
+import fnmatch, json, os, re, shlex, shutil, signal, subprocess, sys, tempfile, time, uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -42,8 +42,16 @@ moving on. Follow these rules exactly:
   the surrounding style.
 - If a task is ambiguous or blocked, do not guess: skip it, note why, and continue with the
   other tasks.
-- Run only the commands the brief names (plus read-only inspection); a command that is not
-  allowed ends your whole run.
+- Run only the exact command lines the brief names. Never improvise a command: no pipes (|),
+  no `python3 -c`, no sed/awk, no sleep, no extra flags. Read and search files with your file
+  tools, not the shell. A command that is not on the allow-list ends your WHOLE run and throws
+  away the report, even when all the work is done.
+- Run every command in the foreground and wait for it to finish; never leave background tasks.
+- Do not read outside the repository (library sources, virtualenvs, caches) unless asked to.
+- At most 2 attempts per defect: if a fix does not hold after 2 tries, stop, mark it failed with
+  your best guess at the root cause, and move on.
+- Say "done" only after re-running that task's check and seeing it pass. You cannot judge visual
+  output (images, renders): say "rendered", never "verified"; the orchestrator looks at it.
 - End with a terse report and nothing else, in exactly this shape:
     1. done|skipped|failed — check: pass|fail|not run — <one short note>
     2. ...
@@ -151,6 +159,7 @@ def _parse(m):
     edits, commands, steps, denied = [], [], [], []
     result, conv = None, m.get("conversation")
     for r in m["rounds"]:
+        last_cmd = None
         for e in _events(m, r["n"]):
             if e.get("event") == "init":
                 conv = e.get("conversation_id") or conv
@@ -168,9 +177,16 @@ def _parse(m):
                             edits.append(target)
                     if s.get("tool_name") == "run_command":
                         commands.append(target)
+                        last_cmd = target
             if e.get("event") == "result":
                 result = e["result"]
-                denied += result.get("denied_actions") or []
+                for d in result.get("denied_actions") or []:
+                    # a denied command is logged as a DONE step: the round's last run_command
+                    if d.get("action") == "command" and last_cmd:
+                        d = {**d, "command": last_cmd}
+                        if commands and commands[-1] == last_cmd:
+                            commands.pop()  # it never ran
+                    denied.append(d)
     if conv != m.get("conversation"):
         m["conversation"] = conv
         _save(m)
@@ -230,13 +246,15 @@ def agy_start(brief: str, cwd: str, allowed_files: list[str], model: str = DEFAU
          "top": str(top) if top else None, "base": snapshot(top) if top else None,
          "allowed": [os.path.realpath(a) for a in allowed], "model": model,
          "timeout_s": timeout_s, "brief": brief, "network": network, "rounds": [], "created": time.time()}
+    pools = _usage_pools(model)
+    m["quota_before"] = {f'{p["pool"]} · {p["window"]}': p["left_pct"] for p in pools}
     (JOBS / m["id"]).mkdir(parents=True)
     _launch(m, _guard(m, brief))
     out = {"job": m["id"], "git": bool(top),
            "wait_cmd": f"{shutil.which('uv') or 'uv'} run --script {Path(__file__).resolve()} wait {m['id']}"}
     if not top:
         out["warning"] = "not a git repo: agy_diff and agy_discard cannot work for this job"
-    low = [p for p in _usage_pools(model) if p["left_pct"] < LOW_PCT]
+    low = [p for p in pools if p["left_pct"] < LOW_PCT]
     if low:
         out["quota_low"] = low
     return out
@@ -332,6 +350,13 @@ def agy_status(job: str | None = None, steps: int = 5, full_report: bool = False
            "edits": [_rel(m, e) for e in edits], "commands": [c[:120] for c in commands],
            "denied": denied, "report": report or None,
            "tokens": ((result or {}).get("usage") or {}).get("total_tokens")}
+    if state != "running" and m.get("quota_before"):
+        if "quota_after" not in m:  # one /usage call per finished job
+            m["quota_after"] = {f'{p["pool"]} · {p["window"]}': p["left_pct"] for p in _usage_pools(m["model"])}
+            _save(m)
+        # ponytail: the pools are shared with other sessions, so this is an upper bound
+        out["quota_drop_pct"] = {k: v - m["quota_after"][k] for k, v in m["quota_before"].items()
+                                 if k in m["quota_after"]}
     if err and (state != "done" or "error" in err.lower()):
         out["stderr"] = err[-400:]
     if "auto-denied" in err:
@@ -435,10 +460,13 @@ def agy_discard(job: str, files: list[str] | None = None) -> dict:
 
 
 @mcp.tool()
-def agy_permissions(add: list[str] | None = None, remove: list[str] | None = None) -> dict:
+def agy_permissions(add: list[str] | None = None, remove: list[str] | None = None,
+                    check: list[str] | None = None) -> dict:
     """Read or edit agy's headless allow-list (permissions.allow in its settings.json).
-    Rules are plain prefixes, no globs: `command(git diff)`, `read_url(https://archive.org/)`. Keep them narrow: a
-    command not on the list is silently denied and shows up in `denied`."""
+    Rules are word prefixes, no globs: `command(git diff)`, `read_url(https://archive.org/)`, or
+    `command(regex:npm run (build|lint))`. Keep them narrow: a command not on the list ends agy's
+    round. `check`: command lines to test against the list after any add/remove — run it on every
+    command a brief names before agy_start."""
     d = json.loads(SETTINGS.read_text()) if SETTINGS.exists() else {}
     allow = d.setdefault("permissions", {}).setdefault("allow", [])
     for r in add or []:
@@ -450,7 +478,32 @@ def agy_permissions(add: list[str] | None = None, remove: list[str] | None = Non
     if add or remove:
         SETTINGS.parent.mkdir(parents=True, exist_ok=True)
         SETTINGS.write_text(json.dumps(d, indent=2) + "\n")
-    return {"allow": allow, "settings": str(SETTINGS)}
+    out = {"allow": allow, "settings": str(SETTINGS)}
+    if check:
+        out["check"] = _check_rules(check, allow)
+    return out
+
+
+def _check_rules(cmds, allow):
+    """Approximate agy's matcher, as observed: each piece of a pipeline or && chain needs its own
+    rule; a plain rule matches whole leading words (`--only=g` does not match `--only=g07`);
+    a regex rule must match the whole piece."""
+    def words(x):
+        try:
+            return shlex.split(x)
+        except ValueError:
+            return x.split()
+    rules = [r[8:-1] for r in allow if r.startswith("command(") and r.endswith(")")]
+    out = []
+    for cmd in cmds:
+        segs = []
+        for seg in (p.strip() for p in re.split(r"\|\||&&|[|;]", cmd) if p.strip()):
+            hit = next((r for r in rules if (re.fullmatch(r[6:], seg) if r.startswith("regex:")
+                        else words(r) and words(seg)[:len(words(r))] == words(r))), None)
+            segs.append({"piece": seg, "rule": f"command({hit})" if hit else None})
+        out.append({"command": cmd, "allowed": all(x["rule"] for x in segs),
+                    "missing": [x["piece"] for x in segs if not x["rule"]]})
+    return out
 
 
 def selftest():
@@ -500,6 +553,12 @@ def selftest():
         assert _state(m_cmd, {"status": "SUCCESS"}) == "done"
     u = _parse_usage("Gemini Models\tWeekly Limit Remaining\t59%\t2999-01-01T00:00:00Z\njunk\n")
     assert len(u) == 1 and u[0]["left_pct"] == 59 and u[0]["resets_in_h"] > 0, u
+    allow = ["command(grep )", "command(regex:npm run (build|lint))", "command(python3 b.py --only=g)"]
+    c = {x["command"]: x["allowed"] for x in _check_rules(
+        ["grep -n x f", "grep x f | awk '{print}'", "npm run lint", "npm run test",
+         "python3 b.py --only=g07", "python3 b.py --only=g"], allow)}
+    assert c == {"grep -n x f": True, "grep x f | awk '{print}'": False, "npm run lint": True,
+                 "npm run test": False, "python3 b.py --only=g07": False, "python3 b.py --only=g": True}, c
     print("selftest ok")
 
 
