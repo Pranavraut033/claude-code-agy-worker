@@ -1,0 +1,3 @@
+task	arm	claude_tokens	cumul_input	tool_uses	wall_s	agy_tokens	agy_wall_s	fixups	jobs
+large	claude	91053	593874	7	37.9	-	-	0	-
+large	agy	106733	1036112	12	1050.4	615340	1002	0	1019-232035-5438

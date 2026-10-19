@@ -1,17 +1,20 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["mcp>=2.3,<3"]
+# dependencies = ["mcp>=2.3,<3", "rich>=13"]
 # ///
 """MCP server: hand mechanical file edits to the Antigravity CLI (`agy`), watch it, audit it.
 
-    uv run --script ~/.claude/mcp/agy-worker/server.py          # stdio server
-    uv run --script ~/.claude/mcp/agy-worker/server.py selftest # snapshot/discard check, no agy
+    uv run --script server.py                # stdio MCP server
+    uv run --script server.py selftest       # snapshot/discard check, no agy
+    uv run --script server.py watch [job]    # live view of a job for humans
+    uv run --script server.py wait <job>     # block until a job ends (background waiter)
+    uv run --script server.py usage          # agy quota left
 
 agy edits in place. Before each job the whole working tree is snapshotted into a git tree
 object through a throwaway index (HEAD, branch and the real index are never touched), so
 agy_diff shows exactly what changed and agy_discard can put agy's files back.
-Job state lives on disk under jobs/, so jobs outlive a server restart.
+Job state lives on disk under $AGY_WORKER_HOME/jobs, so jobs outlive a server restart.
 """
 import fnmatch, json, os, shutil, signal, subprocess, sys, tempfile, time, uuid
 from datetime import datetime, timezone
@@ -516,33 +519,66 @@ def wait_cli(job, max_s=7200):
 
 
 def watch_cli(job=None):
-    """`server.py watch [job]`: follow a job live for a human, one line per finished tool step
-    (green done, red error), then its final report. No job: the newest one. Read-only.
-    ponytail: re-parses the round logs every 2 s; fine for logs of a few MB."""
+    """`server.py watch [job]`: follow a job live for a human. A header panel, one line per finished
+    tool step (icon, time into the run, target), a spinner on the step in progress, then a summary
+    panel with the report. No job: the newest one. Read-only.
+    ponytail: re-parses the round logs every second; fine for logs of a few MB."""
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.text import Text
+    con = Console(highlight=False)
     if job is None:
         ids = sorted(p.name for p in JOBS.iterdir() if p.is_dir()) if JOBS.exists() else []
         if not ids:
             sys.exit(f"no jobs in {JOBS}")
         job = ids[-1]  # ids start with %m%d-%H%M%S, so the last is the newest
-    m, tty, shown, live = _load(job), sys.stdout.isatty(), 0, False
-    print(f"job {job} · {m['model']} · {m['cwd']}\n{m['brief'][:160].strip()}…\n", flush=True)
-    while True:
-        m = _load(job)  # agy_resume adds rounds
-        _, _, st, _, result = _parse(m)
-        done = [x for x in st if x["state"] != "ACTIVE"]
-        for x in done[shown:]:
-            line = f'{time.strftime("%H:%M:%S") if live else "  ·     "}  {x["tool"]:<26} {_short(m, x["target"])}'
-            c = {"DONE": "32", "ERROR": "31"}.get(x["state"], "0")
-            print(f"\033[{c}m{line}\033[0m" if tty else line, flush=True)
-        shown, live = len(done), True
-        state = "cancelled" if m.get("cancelled") else _state(m, result)
-        if state != "running":
-            s = agy_status(job, full_report=True)
-            print(f"\n{state.upper()} · round {s['round']} · {s['elapsed_s']} s · tokens {s['tokens']}"
-                  f" · denied {s['denied'] or 'none'}\n\n{s['report'] or s.get('hint') or s.get('stderr') or ''}")
-            return
-        time.sleep(2)
+    m = _load(job)
+    icons = {"view_file": ("📄", "dim"), "list_dir": ("📁", "dim"), "grep_search": ("🔍", "dim"),
+             "search_web": ("🔎", "cyan"), "read_url_content": ("🌐", "cyan"),
+             "run_command": ("▶", "yellow"), "command_status": ("⏱", "dim")}
+    icons.update({t: ("✎", "green") for t in WRITE_TOOLS})
+    first = next((ln for ln in m["brief"].splitlines() if ln.strip() and not ln.startswith("#")), "")
+    con.print(Panel(Text.assemble((f"{job}\n", "bold"), (f"{m['model']}  ·  {m['cwd'].replace(str(Path.home()), '~')}\n", "cyan"),
+                                  (first[:110], "dim")), title="agy job", border_style="blue", expand=False))
 
+    def stamp():
+        r = m["rounds"][-1]
+        sec = max(0, int(time.time() - r["started"]))
+        return f"r{r['n']} {sec // 60:02d}:{sec % 60:02d}"
+
+    shown, live = 0, False
+    with con.status("starting…", spinner="dots") as spin:
+        while True:
+            m = _load(job)  # agy_resume adds rounds
+            edits, _, st, _, result = _parse(m)
+            done = [x for x in st if x["state"] != "ACTIVE"]
+            for x in done[shown:]:
+                icon, style = icons.get(x["tool"], ("•", "white"))
+                if x["state"] == "ERROR":
+                    icon, style = "✗", "bold red"
+                con.print(Text.assemble((f"{stamp() if live else '   ·    '}  ", "dim"), f"{icon} ",
+                                        (f"{x['tool']:<24}", style), _short(m, x["target"])),
+                          no_wrap=True, overflow="ellipsis")
+            shown, live = len(done), True
+            state = "cancelled" if m.get("cancelled") else _state(m, result)
+            if state != "running":
+                break
+            now = st[-1] if st and st[-1]["state"] == "ACTIVE" else None
+            spin.update(Text.assemble((f"{stamp()}  ", "dim"), (f"{len(done)} steps · {len(edits)} edits", "bold"),
+                                      f"  ·  now: {now['tool']} {_short(m, now['target'])}" if now else "  ·  thinking…"))
+            time.sleep(1)
+    s = agy_status(job, full_report=True)
+    color = {"done": "green", "failed": "red", "stalled": "yellow"}.get(state, "white")
+    facts = Text.assemble((f"{state.upper()}", f"bold {color}"),
+                          f"  ·  round {s['round']}  ·  {s['elapsed_s']} s  ·  {s['n_steps']} steps"
+                          f"  ·  {s['tokens'] or '?'} tokens\n",
+                          ("edits: ", "bold"), ", ".join(s["edits"]) or "none", "\n",
+                          ("denied: ", "bold"), (str(s["denied"]) if s["denied"] else "none",
+                                                 "red" if s["denied"] else ""))
+    con.print(Panel(facts, title="result", border_style=color, expand=False))
+    body = s["report"] or s.get("hint") or s.get("stderr") or ""
+    if body:
+        con.print(Panel(Text(body.strip()), title="agy's report", border_style="dim"))
 
 if __name__ == "__main__":
     if sys.argv[1:] == ["selftest"]:

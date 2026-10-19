@@ -1,0 +1,7 @@
+task	arm	claude_tokens	claude_tool_uses	wall_s	agy_tokens	agy_wall_s	fixups	jobs
+t1	claude	81332	2	7.2	-	-	0	-
+t1	agy	100984	11	134.7	77061	108	0	1019-223835-c45d
+t2	claude	96300	5	19.2	-	-	0	-
+t2	agy	115652	11	190.1	95671	160	0	1019-224117-0d31
+t3	claude	86292	5	14.0	-	-	0	-
+t3	agy	102845	11	211.1	102863	187	0	1019-224444-2cd9

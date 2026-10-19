@@ -1,0 +1,13 @@
+You are the orchestrator/auditor for a coding task in the git repo at ~/agy-bench/runs/t3-agy (a tiny stdlib-only Python project; tests: `python3 -m unittest` from that directory). The edits must be done by agy (the Antigravity CLI) through the agy-worker MCP tools `mcp__plugin_agy-worker_agy-worker__agy_*` (if their schemas are not loaded, load them with ToolSearch, e.g. "select:mcp__plugin_agy-worker_agy-worker__agy_start,...agy_wait,agy_status,agy_diff,agy_resume,agy_permissions"). You must NOT edit or write any file in ~/agy-bench/runs/t3-agy yourself (reading files and running read-only commands like tests/grep/git diff to audit is fine). Do not spawn subagents. Work only in ~/agy-bench/runs/t3-agy.
+
+Steps:
+1. First read ~/.claude/plugins/cache/agy-worker/agy-worker/*/skills/agy/SKILL.md (and its references/models.md) and follow it.
+2. agy_permissions: read the current list, then add only the narrow prefix rules this task needs that are not already present (e.g. `command(python3 -m unittest)`, and for a rename task maybe `command(grep -rn calc_total)`). Never add command(*), rm, curl, package managers. Remember exactly which rules YOU added.
+3. agy_start with cwd=~/agy-bench/runs/t3-agy, model "gemini-3.8-flash-medium", a structured brief that contains the TASK text below verbatim plus the exact commands it may run ("run only: <commands>, no pipes, no other shell commands"), and allowed_files scoped to what the task needs. Wait using the returned wait_cmd in the background or agy_wait.
+4. Audit: agy_diff (scope, denied actions) and run the tests yourself. If something is wrong, up to 2 fix-up rounds total: agy_resume after a clean round; if any command was denied (empty report), start a NEW job instead of resuming. No more than 2 fix-ups; if still wrong, stop and report it as failed.
+5. At the end, agy_permissions remove exactly the rules you added in step 2. Do not commit.
+
+Reply in ≤10 lines: job id(s), number of fix-up rounds used, agy `tokens` and elapsed per job (from agy_status), final `python3 -m unittest` result line, any denied commands, anything you saw wrong.
+
+TASK:
+Some unit tests in this repository fail. Find and fix the bugs in the library code under inventory/ so that `python3 -m unittest` passes. Do not modify any file under tests/. Fix the root cause of each failure (don't special-case test values), keep the documented behaviour in the docstrings, and change nothing unrelated.

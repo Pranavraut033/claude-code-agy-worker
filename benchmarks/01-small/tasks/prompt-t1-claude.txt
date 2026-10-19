@@ -1,0 +1,4 @@
+You are doing a coding task in the git repo at ~/agy-bench/runs/t1-claude (a tiny stdlib-only Python project; run tests with `python3 -m unittest` from that directory). Do the task yourself with your own tools. Do NOT use any agy / agy-worker / mcp__plugin_agy-worker tools, and do not spawn subagents. Work only inside ~/agy-bench/runs/t1-claude; touch nothing else on the machine. Do not commit (leave changes in the working tree). When done, reply in ≤8 lines: what you changed (files), the final `python3 -m unittest` result line.
+
+TASK:
+Rename the function `calc_total` to `compute_total` everywhere in this repository: its definition in inventory/pricing.py, every import and call site, every test, and every mention in docstrings and comments. Do not keep an alias under the old name. Change nothing else. When done, `grep -rn calc_total --exclude-dir=.git .` must print nothing and `python3 -m unittest` must pass.

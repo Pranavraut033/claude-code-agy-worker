@@ -1,0 +1,15 @@
+You are doing a coding task in the git repo at ~/agy-bench/runs/t2-claude (a tiny stdlib-only Python project; run tests with `python3 -m unittest` from that directory). Do the task yourself with your own tools. Do NOT use any agy / agy-worker / mcp__plugin_agy-worker tools, and do not spawn subagents. Work only inside ~/agy-bench/runs/t2-claude; touch nothing else on the machine. Do not commit (leave changes in the working tree). When done, reply in ≤8 lines: what you changed (files), the final `python3 -m unittest` result line.
+
+TASK:
+Add CSV output to the stock report.
+
+1. In inventory/report.py add `to_csv(store) -> str`. Write it with the stdlib `csv` module (`csv.writer` with default QUOTE_MINIMAL quoting and `lineterminator="\n"`), so a field containing a comma or a double quote is wrapped in double quotes and inner quotes are doubled.
+   - First row, exactly: `sku,name,qty,unit_price,line_total`
+   - Then one row per item in sku order (`store.items()`): sku, name, qty as an integer, unit_price, line_total.
+   - unit_price and line_total are written with exactly two decimals, using the same half-up cent rounding as inventory/pricing.py (so a unit price of 2.675 is written `2.68`, not `2.67`). line_total is `pricing.line_total(item)`.
+   - Last row: `TOTAL,,,,<total>` where `<total>` is the order total (the existing total function in pricing.py) with two decimals. An empty store gives just the header and `TOTAL,,,,0.00`.
+   - The returned string ends with a single "\n".
+2. Add `csv` to the `--format` choices of `python3 -m inventory.report`; with `--format csv` it writes `to_csv(store)` to stdout exactly, nothing else. The default stays `text` and its output is unchanged.
+3. Add unit tests for both to tests/test_report.py (exact-string assertions, including a name with a comma and one with a double quote).
+
+Do not change any other behaviour. `python3 -m unittest` must pass.
