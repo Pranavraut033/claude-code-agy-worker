@@ -24,6 +24,11 @@ its own quota on a separate plan. So:
 The hoped-for payoff: spend less of the Claude usage limit, keep quality, because Claude still
 reviews everything.
 
+We looked at existing Claude↔Gemini bridges first. Most were thin wrappers that send one prompt and
+return text. None snapshotted the working tree, checked scope, or treated the worker's output as
+something to audit — so we built our own, borrowing the good ideas (background jobs, stream-json
+parsing).
+
 ## 2. Design decisions (and why)
 
 | Decision | Why |
