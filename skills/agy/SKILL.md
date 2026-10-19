@@ -16,7 +16,7 @@ servers, settings) — Claude Code's safety check blocks agy editing them, so th
 edits those itself.
 
 agy edits **in place** (no worktree); the agy-worker server snapshots the tree first so
-every change can be diffed and reverted. Tools: `mcp__agy-worker__agy_*`. Missing → the
+every change can be diffed and reverted. Tools: the agy-worker MCP server's `agy_*` tools (`mcp__agy-worker__…` when registered by hand, `mcp__plugin_agy-worker_agy-worker__…` from the plugin). Missing → the
 server is not connected (check `/mcp`; the plugin's server needs `uv` on PATH).
 
 **agy is an agent, not a sed.** Each job costs ~40 s of cold start plus a brief, and agy

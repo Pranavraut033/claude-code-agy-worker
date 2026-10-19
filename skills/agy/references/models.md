@@ -119,6 +119,8 @@ Don't spend it on packages Flash can do — the weekly quota is limited.
 | 2026-10-19 | flash-medium | 11 exact key replacements in one file (short brief) | 155 s | 12 | clean, scope clean |
 | 2026-10-19 | flash-medium | package: 4 constant edits + 4 sequential renders (5-12 min commands, 3600 s timeout) | 37 min | ~25 | clean; `agy_wait` returns instantly as `stalled` while a long command runs (not a real stall), poll the output files instead (fixed in v0.1.0: an ACTIVE run_command counts as running) |
 | 2026-10-19 | flash-medium | clip_sfx.py + mix.sh | 77 s | 12 | clip_sfx ok; mix.sh failed: system python3 has no numpy (script needs .venv/bin on PATH, a rule prefix cannot carry env vars) |
+| 2026-10-19 | flash-high | package: build plugin repo (copy 3 files, 3 server fixes + selftest, scrub docs, manifests, README) | 547 s | 56 | all 8 tasks done; denied on the last check (`grep … \| awk` pipe) → no report; audit passed |
+| 2026-10-19 | flash-medium | fix-up as fresh job: simplify one function + 6 README edits ("no pipes" in brief) | 114 s | 19 | clean, no denials |
 
 ## Changelog
 
