@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "agy-worker": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--script",
+        "${CLAUDE_PLUGIN_ROOT}/server/server.py"
+      ]
+    }
+  }
+}

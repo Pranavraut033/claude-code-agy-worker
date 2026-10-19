@@ -1,0 +1,14 @@
+{
+  "name": "agy-worker",
+  "owner": {
+    "name": "Pranav Raut"
+  },
+  "description": "Claude Code orchestrates and audits; the Antigravity CLI (agy) does the mechanical work in long multi-task work packages. MCP server + /agy skill.",
+  "plugins": [
+    {
+      "name": "agy-worker",
+      "source": "./",
+      "description": "Claude Code orchestrates and audits; the Antigravity CLI (agy) does the mechanical work in long multi-task work packages. MCP server + /agy skill."
+    }
+  ]
+}
