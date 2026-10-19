@@ -51,8 +51,9 @@ Before any brief, lay out the whole job (in the plan, not in agy's head):
 - **Parallel when independent:** packages touching disjoint files can run at once (separate
   `agy_start`s). Never two packages on the same files.
 - **Sequential when dependent:** package 2 starts after package 1 is audited. If it builds
-  directly on package 1's context, continue that conversation with `agy_resume` (a clean
-  round only — never after a denial).
+  on package 1's context, send it to the same job with `agy_resume`: every job is a **live agy
+  session**, so the next message skips the cold start (~2–3 s turn overhead instead of ~25 s)
+  and keeps the context. `agy_close(job)` when the session's work is audited.
 
 ## 2. Write the package brief
 
@@ -122,9 +123,10 @@ interpreter, `rm`, `sleep`, `curl`, `git push`, package managers, or
 `--dangerously-skip-permissions`. **Before `agy_start`, run `agy_permissions(check=[…])` on every
 command line the brief names** — each piece of a pipe or `&&` chain needs its own rule, and a plain
 rule matches whole words only (`--only=g` does not cover `--only=g07-…`; use the regex form for a
-family). Remove one-off rules after the package. After a denial (`denied` names the command):
-grant the rule (or forbid the action in the brief) and **start a new job** with the same
-brief — `agy_status` shows a `hint`; resuming a denial-ended conversation has wedged.
+family). Remove one-off rules after the package. A denial ends only the current round; the
+session survives. agy reads its rules only at startup, so after a denial (`denied` names the
+command): audit what landed, grant the rule (or forbid the command), then `agy_resume` — it
+restarts agy on the same conversation with the new rules, context kept (measured: 11.5 s).
 
 ## 4. Monitor a long run — without spending turns
 
@@ -193,8 +195,8 @@ granted exactly.
   is routine enough to switch.
 - **agy:** Flash by default (Argon used 5–10× the tokens per job); exact context paths so
   it doesn't explore; every needed command granted up front (a denial wastes the round);
-  packages sized 10–60 min so cold starts and briefs amortise; continue the conversation
-  for a dependent package after a clean round (Gemini caches the context).
+  packages sized 10–60 min so cold starts and briefs amortise; send dependent packages and
+  fix-ups to the same live session (no cold start, context cached).
 - **Neither side** does work twice: agy's checks feed your audit, your audit findings go
   into one consolidated fix-up message.
 

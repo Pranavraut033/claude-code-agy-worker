@@ -54,6 +54,11 @@ parsing).
 - **The agy process can outlive its result**, and a long command emits no events for minutes. Both
   made jobs look "stalled". Job state now comes from the final `result` event, and an `ACTIVE`
   command counts as running.
+- **Keep agy running instead of restarting it.** With `--input-format stream-json` one agy process
+  takes message after message: follow-ups skip the ~25 s cold start, and — the big one — **a denied
+  command ends only that turn, not the session**. agy reads its allow-list only at startup, but
+  restarting it on the same conversation (`--conversation <id>`) picks up a new rule and keeps the
+  context. Since v0.2.0 every job is such a live session, and `agy_resume` sends the next message.
 - **`agy -p "/usage"` shows quota for free** (no model call): Gemini 5-hour and weekly pools, a
   separate weekly pool for Gemini 4 Argon, and reset times.
 - **Claude Code refuses to let agy edit files under `~/.claude/`** (self-modification guard), so the

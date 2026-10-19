@@ -20,11 +20,16 @@ section here and a row to the timing table. Append to the changelog at the botto
 - **Permission rules** (`~/.gemini/antigravity-cli/settings.json` → `permissions.allow`):
   `action(prefix)` — plain prefix, `*` is literal. Regex form: `command(regex:npm run (build|lint))`
   (official, headless.md). Actions seen: `command`, `read_url`, `write_file`.
-- **A denial ends the run in practice.** Docs say a soft-denied tool lets "the run continue";
-  observed every time (7 rounds): the round stops, `response` is empty, stderr says
-  "no output produced … auto-denied". Resuming that conversation afterwards wedged once
-  (0 tool calls, ~40k output tokens, interrupted). → Start a fresh job; `agy_status` now
-  returns a `hint` when this happens.
+- **A denial ends the round in practice.** Docs say a soft-denied tool lets "the run continue";
+  observed every time: the round stops and `response` is empty. In `-p` mode that ended the
+  whole job, and resuming that conversation wedged once (0 tool calls, ~40k output tokens).
+- **Live sessions (agy-worker ≥ 0.2.0):** `--input-format stream-json --output-format stream-json`,
+  one stdin line per message: `{"event": "user", "message": {"content": "…"}}` (a missing
+  `event` field kills the session). Measured 2026-10-20 (flash-low): first turn 9 s incl. ~4 s
+  start-up, later trivial turns 2–3 s; a real follow-up edit 14 s vs 27 s cold. **A denial ends only
+  that turn; the session keeps working.** Rules are read at startup only: granting mid-session
+  does not apply, but restarting with `--conversation <id>` does, context kept (11.5 s).
+  `usage`, `duration_seconds` and `denied_actions` in each `result` are cumulative per session.
 - **Baseline read-only allow-list** (kept in settings; models explore with these even when told
   not to): `ls`, `cat `, `head `, `tail `, `wc `, `grep `, `rg `, `git status`, `git diff`,
   `git log`, `git show`. Never a bare interpreter (`python3`), `rm`, `sleep`, `curl`, push.
@@ -133,6 +138,10 @@ Don't spend it on packages Flash can do — the weekly quota is limited.
 | 2026-10-19 | flash-high | new feature in a checker + 2 selftests + JSON edits | 17.5 min | 60 | clean; wrote extra selftests unprompted |
 | 2026-10-19 | flash-high | rewords + local TTS + alignment (long commands) | 36 min | 31 | work done, then denied on a `\| sort` check → no report |
 | 2026-10-19 | flash-high | add a CLI flag, re-level, retile | 40 min | 12 | task 1 only; denied `--selftest` (only another subcommand granted) |
+| 2026-10-20 | flash-low | live session: append a line (cold start) | 27.2 s | – | clean |
+| 2026-10-20 | flash-low | same session, live follow-up edit | 14.1 s | – | clean, no cold start |
+| 2026-10-20 | flash-low | same session: non-allowed command | 4.0 s | – | denied, session survived |
+| 2026-10-20 | flash-low | grant rule, resume → restart on same conversation | 11.5 s | – | ran it; remembered earlier edits |
 
 ## Changelog
 
@@ -140,3 +149,4 @@ Don't spend it on packages Flash can do — the weekly quota is limited.
 - 2026-10-19: recipes reframed for multi-task work packages (skill now briefs packages, not single edits); server default timeout 3600 s, stall 300 s.
 - 2026-10-19: quota visibility — `agy_usage()` tool, `quota_low` on agy_start, skill budgets Argon by % left; record quota drop per notable job (baseline: Gemini weekly 59%, Argon weekly 31%).
 - 2026-10-20: 12 rows from three real project sessions (22 jobs). Patterns: denials ended 8 of 22 jobs, almost all improvised variants of allowed commands (`python3 -c`, pipes, an extra flag); agy cannot judge visual output; one 56-min thrash on a single defect. → v0.1.5 guard (exact commands, no pipes, foreground only, 2 attempts per defect, never "verified" for visuals), `agy_permissions(check=…)`, denied command named in status, per-job quota drop.
+- 2026-10-20: live sessions (agy-worker 0.2.0): stream-json input, follow-ups without cold start, a denial ends only the turn, restart-on-conversation applies new rules; 4 timing rows.

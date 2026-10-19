@@ -16,7 +16,7 @@ object through a throwaway index (HEAD, branch and the real index are never touc
 agy_diff shows exactly what changed and agy_discard can put agy's files back.
 Job state lives on disk under $AGY_WORKER_HOME/jobs, so jobs outlive a server restart.
 """
-import fnmatch, json, os, re, shlex, shutil, signal, subprocess, sys, tempfile, time, uuid
+import fnmatch, json, os, re, shlex, shutil, signal, subprocess, sys, tempfile, threading, time, uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -28,7 +28,8 @@ WRITE_TOOLS = {"replace_file_content", "multi_replace_file_content", "write_to_f
                "notebook_edit"}
 LOW_PCT = 20  # agy_start flags a pool below this
 STALL_S = 300  # Argon can think quietly for minutes; a Flash stall at 5 min is real
-PROCS = {}  # job id -> Popen, so finished children get reaped
+PROCS = {}  # job id -> live Popen (stdin open: a session that takes more messages)
+CUR = {}    # job id -> round number the session's output is being written to
 
 GUARD = """You are the worker on a work package for an orchestrator who will audit every change
 you make. Plan the tasks, then work through them in order, running each task's check before
@@ -127,20 +128,53 @@ def _alive(m):
 
 
 def _launch(m, prompt, conversation=None):
-    n = len(m["rounds"]) + 1
-    d = JOBS / m["id"]
-    cmd = [AGY, "-p", prompt, "--output-format", "stream-json", "--mode", "accept-edits",
-           "--model", m["model"], "--print-timeout", f"{m['timeout_s']}s"]
+    """Start an agy session (stream-json in and out; stdin stays open for more messages) and
+    send the first message. agy reads its allow-list only at startup, so a session that hit a
+    denial is restarted on the same conversation instead (see agy_resume)."""
+    seg = m.get("seg", 0) + 1
+    cmd = [AGY, "--input-format", "stream-json", "--output-format", "stream-json",
+           "--mode", "accept-edits", "--model", m["model"]]
     if conversation:
         cmd += ["--conversation", conversation]
-    # stdin from /dev/null: agy -p can hang waiting on a non-tty stdin (agy issue #318)
-    p = subprocess.Popen(cmd, cwd=m["cwd"], stdin=subprocess.DEVNULL,
-                         stdout=open(d / f"r{n}.jsonl", "w"), stderr=open(d / f"r{n}.err", "w"),
+    p = subprocess.Popen(cmd, cwd=m["cwd"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                         stderr=open(JOBS / m["id"] / f"s{seg}.err", "w"), text=True, bufsize=1,
                          start_new_session=True)
-    PROCS[m["id"]] = p
-    m["pid"] = p.pid
-    m["rounds"].append({"n": n, "started": time.time()})
+    PROCS[m["id"]], m["pid"], m["seg"] = p, p.pid, seg
+
+    def pump(jid=m["id"]):  # route each output line into the file of the round it belongs to
+        for line in p.stdout:
+            with open(JOBS / jid / f"r{CUR[jid]}.jsonl", "a") as f:
+                f.write(line)
+    _send(m, prompt)
+    threading.Thread(target=pump, daemon=True).start()
+
+
+def _send(m, text):
+    """One message to the live session = one round."""
+    n = len(m["rounds"]) + 1
+    (JOBS / m["id"] / f"r{n}.jsonl").touch()
+    m["rounds"].append({"n": n, "started": time.time(), "seg": m["seg"], "err": f"s{m['seg']}.err"})
+    CUR[m["id"]] = n
     _save(m)
+    p = PROCS[m["id"]]
+    p.stdin.write(json.dumps({"event": "user", "message": {"content": text}}) + "\n")
+    p.stdin.flush()
+
+
+def _live(m):
+    p = PROCS.get(m["id"])
+    return p is not None and p.poll() is None and not p.stdin.closed
+
+
+def _close(m, wait=20):
+    """Close the session's stdin: agy finishes the current turn and exits."""
+    p = PROCS.pop(m["id"], None)
+    if p is not None and p.poll() is None:
+        try:
+            p.stdin.close()
+            p.wait(wait)
+        except (OSError, subprocess.TimeoutExpired):
+            os.killpg(p.pid, signal.SIGTERM)
 
 
 def _events(m, n):
@@ -157,9 +191,9 @@ def _events(m, n):
 def _parse(m):
     """Fold every round's events into what agy did."""
     edits, commands, steps, denied = [], [], [], []
-    result, conv = None, m.get("conversation")
+    result, conv, seen, tokens = None, m.get("conversation"), {}, {}
     for r in m["rounds"]:
-        last_cmd = None
+        last_cmd, result, seg = None, None, r.get("seg", r["n"])  # old jobs: one process per round
         for e in _events(m, r["n"]):
             if e.get("event") == "init":
                 conv = e.get("conversation_id") or conv
@@ -180,7 +214,10 @@ def _parse(m):
                         last_cmd = target
             if e.get("event") == "result":
                 result = e["result"]
-                for d in result.get("denied_actions") or []:
+                tokens[seg] = ((result.get("usage") or {}).get("total_tokens") or 0)  # cumulative per session
+                das = result.get("denied_actions") or []
+                new, seen[seg] = das[seen.get(seg, 0):], len(das)  # a session repeats earlier denials
+                for d in new:
                     # a denied command is logged as a DONE step: the round's last run_command
                     if d.get("action") == "command" and last_cmd:
                         d = {**d, "command": last_cmd}
@@ -190,6 +227,8 @@ def _parse(m):
     if conv != m.get("conversation"):
         m["conversation"] = conv
         _save(m)
+    if result is not None:
+        result = {**result, "_tokens": sum(tokens.values()), "_denied_now": bool(new)}
     return edits, commands, steps, denied, result
 
 
@@ -335,8 +374,12 @@ def agy_status(job: str | None = None, steps: int = 5, full_report: bool = False
     edits, commands, st, denied, result = _parse(m)
     r = m["rounds"][-1]
     n = r["n"]
-    err = (JOBS / job / f"r{n}.err").read_text(errors="replace").strip()
+    ep = JOBS / job / r.get("err", f"r{n}.err")
+    err = ep.read_text(errors="replace").strip() if ep.exists() else ""
     state = "cancelled" if m.get("cancelled") else _state(m, result)
+    if state in ("running", "stalled") and time.time() - r["started"] > m["timeout_s"]:
+        agy_cancel(job)  # stream sessions have no --print-timeout, so the server enforces it
+        state, err = "cancelled", f"timed out after {m['timeout_s']} s. " + err
     report = (result or {}).get("response") or ""
     if not full_report and len(report) > 1500:
         report = report[:1500] + " …[truncated: agy_status(full_report=True)]"
@@ -349,7 +392,7 @@ def agy_status(job: str | None = None, steps: int = 5, full_report: bool = False
                      for x in done_steps[-steps:]],
            "edits": [_rel(m, e) for e in edits], "commands": [c[:120] for c in commands],
            "denied": denied, "report": report or None,
-           "tokens": ((result or {}).get("usage") or {}).get("total_tokens")}
+           "tokens": (result or {}).get("_tokens"), "session": "open" if _live(m) else "closed"}
     if state != "running" and m.get("quota_before"):
         if "quota_after" not in m:  # one /usage call per finished job
             m["quota_after"] = {f'{p["pool"]} · {p["window"]}': p["left_pct"] for p in _usage_pools(m["model"])}
@@ -359,11 +402,12 @@ def agy_status(job: str | None = None, steps: int = 5, full_report: bool = False
                                  if k in m["quota_after"]}
     if err and (state != "done" or "error" in err.lower()):
         out["stderr"] = err[-400:]
-    if "auto-denied" in err:
+    if (result or {}).get("_denied_now"):
         # a resume after a denial-ended run wedged (0 tool steps, ~40k output tokens) on 2026-10-19
-        out["hint"] = ("This round ended on a denied action, so its edits may be partial and there is no "
-                       "report. Grant the rule (agy_permissions) or forbid the action in the brief, then "
-                       "start a NEW job with the same brief rather than agy_resume.")
+        out["hint"] = ("This round ended on a denied command (see `denied`), so its edits may be partial "
+                       "and there is no report; audit the diff first. Grant the rule (agy_permissions) or "
+                       "forbid the command, then agy_resume: it restarts agy on the same conversation so "
+                       "the new rule applies and the context is kept.")
     return out
 
 
@@ -408,17 +452,34 @@ def agy_diff(job: str, files: list[str] | None = None, max_chars: int = 6000) ->
 
 @mcp.tool()
 def agy_resume(job: str, message: str) -> dict:
-    """Fix-up round: send `message` to the same agy conversation (the guard rules and the
-    allowed files are restated). The diff baseline stays the original snapshot."""
+    """Next message to the job's agy session: a fix-up round or the next package in the same
+    context (the guard rules and allowed files are restated). A live session takes it in ~2-3 s;
+    after a denial (agy reads rules only at startup) or a server restart, agy is restarted on
+    the same conversation, context kept. The diff baseline stays the original snapshot."""
     m = _load(job)
-    _parse(m)
-    if _alive(m):
-        return {"error": "job is still running; agy_wait or agy_cancel first"}
+    *_, result = _parse(m)
+    if _state(m, result) == "running":
+        return {"error": "job is still running; wait for it or agy_cancel first"}
     if not m.get("conversation"):
         return {"error": "no conversation id recorded for this job; start a new one"}
     m.pop("cancelled", None)
-    _launch(m, _guard(m, message), m["conversation"])
-    return {"job": job, "round": len(m["rounds"])}
+    if _live(m) and not (result or {}).get("_denied_now"):
+        _send(m, _guard(m, message))
+        how = "live"
+    else:
+        _close(m)
+        _launch(m, _guard(m, message), m["conversation"])
+        how = "restarted"
+    return {"job": job, "round": len(m["rounds"]), "session": how}
+
+
+@mcp.tool()
+def agy_close(job: str) -> dict:
+    """End a job's agy session once its package is audited (frees the process). The job's
+    files, diff and discard keep working; agy_resume can still reopen the conversation."""
+    m = _load(job)
+    _close(m)
+    return {"job": job, "session": "closed"}
 
 
 @mcp.tool()
@@ -428,6 +489,7 @@ def agy_cancel(job: str) -> dict:
     m = _load(job)
     if _alive(m):
         os.killpg(m["pid"], signal.SIGTERM)
+    PROCS.pop(job, None)
     m["cancelled"] = True
     _save(m)
     return {"job": job, "state": "cancelled"}
@@ -553,6 +615,26 @@ def selftest():
         assert _state(m_cmd, {"status": "SUCCESS"}) == "done"
     u = _parse_usage("Gemini Models\tWeekly Limit Remaining\t59%\t2999-01-01T00:00:00Z\njunk\n")
     assert len(u) == 1 and u[0]["left_pct"] == 59 and u[0]["resets_in_h"] > 0, u
+    # one session, two rounds: round 2 repeats round 1's denial (cumulative) and has no result yet
+    JOBS = Path(tempfile.mkdtemp()) / "jobs"
+    m2 = {"id": "t_ses", "cwd": str(repo), "top": str(repo), "base": None, "allowed": [], "model": "x",
+          "timeout_s": 99, "brief": "", "pid": -1, "seg": 1,
+          "rounds": [{"n": 1, "started": 0, "seg": 1}, {"n": 2, "started": 0, "seg": 1}]}
+    (JOBS / "t_ses").mkdir(parents=True)
+    _save(m2)
+    cmd = {"event": "step_update", "step_update": {"step_type": "tool", "state": "DONE", "tool_name": "run_command",
+           "tool_info": {"parameters": {"CommandLine": "sleep 1"}}}}
+    res = {"event": "result", "result": {"status": "SUCCESS", "response": "",
+           "denied_actions": [{"action": "command"}], "usage": {"total_tokens": 10}}}
+    (JOBS / "t_ses/r1.jsonl").write_text(json.dumps(cmd) + "\n" + json.dumps(res) + "\n")
+    (JOBS / "t_ses/r2.jsonl").write_text("")
+    _, cmds, _, den, result = _parse(m2)
+    assert result is None and _state(m2, result) == "failed", result  # round 2 pending, process gone
+    assert len(den) == 1 and den[0]["command"] == "sleep 1" and cmds == [], (den, cmds)
+    (JOBS / "t_ses/r2.jsonl").write_text(json.dumps(res) + "\n")  # same cumulative denial again
+    _, _, _, den, result = _parse(m2)
+    assert len(den) == 1 and result["_tokens"] == 10 and not result["_denied_now"], (den, result)
+    shutil.rmtree(JOBS.parent)
     allow = ["command(grep )", "command(regex:npm run (build|lint))", "command(python3 b.py --only=g)"]
     c = {x["command"]: x["allowed"] for x in _check_rules(
         ["grep -n x f", "grep x f | awk '{print}'", "npm run lint", "npm run test",

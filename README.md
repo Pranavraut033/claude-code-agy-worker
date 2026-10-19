@@ -6,7 +6,7 @@
 
 A Claude Code plugin that hands long, multi-task work packages to the Antigravity CLI (`agy`) and audits every change it makes.
 
-![version](https://img.shields.io/badge/version-0.1.5-blue) [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE) ![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-D97757?logo=anthropic&logoColor=white) ![Antigravity CLI](https://img.shields.io/badge/Antigravity_CLI-1.4.2-4285F4?logo=google&logoColor=white) ![MCP](https://img.shields.io/badge/MCP-server-8A2BE2) ![python](https://img.shields.io/badge/python-3.10%2B_·_uv-3776AB?logo=python&logoColor=white) ![platform](https://img.shields.io/badge/tested_on-macOS-lightgrey?logo=apple)
+![version](https://img.shields.io/badge/version-0.2.0-blue) [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE) ![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-D97757?logo=anthropic&logoColor=white) ![Antigravity CLI](https://img.shields.io/badge/Antigravity_CLI-1.4.2-4285F4?logo=google&logoColor=white) ![MCP](https://img.shields.io/badge/MCP-server-8A2BE2) ![python](https://img.shields.io/badge/python-3.10%2B_·_uv-3776AB?logo=python&logoColor=white) ![platform](https://img.shields.io/badge/tested_on-macOS-lightgrey?logo=apple)
 
 **📖 New here? Read [the journey](JOURNEY.md)** — why we built this, what broke, and what the benchmarks really showed.
 
@@ -27,7 +27,7 @@ sequenceDiagram
     A->>A: edit files, run checks
     W-->>Claude: background waiter wakes Claude
     Claude->>W: agy_diff — scope check + audit
-    Claude->>A: agy_resume — up to 2 fix-up rounds
+    Claude->>A: agy_resume — next message, same live session
     Claude->>W: agy_discard — revert anything bad (optional)
 ```
 
@@ -71,7 +71,8 @@ A header panel, one line per step with an icon (📄 read · ✎ edit · ▶ com
 | `agy_status` | One job's progress: compact state, steps, edits, commands, denied actions, report. |
 | `agy_wait` | Block until job finishes or stalls; returns agy_status. |
 | `agy_diff` | Audit changed files against snapshot, out-of-scope edits, denied actions, diff. |
-| `agy_resume` | Fix-up round: send a message to the same agy conversation. |
+| `agy_resume` | Next message to the job's live agy session (fix-up or next package), ~2–3 s overhead; restarts with new rules after a denial. |
+| `agy_close` | End a job's agy session once its work is audited. |
 | `agy_cancel` | Kill a running job and terminate its process group. |
 | `agy_discard` | Restore files from the pre-job snapshot; delete agy-created files. |
 | `agy_permissions` | Read or edit agy's allow-list; `check=[…]` tests a brief's commands first. |
@@ -147,7 +148,7 @@ Per task: done / skipped (why) / check result; files changed.
 
 - **Permission rules are prefixes**: Rules match prefixes (`command(...)`, `read_url(...)`) or regex `command(regex:...)`; wildcard `*` is literal.
 - **Denials abort the round**: Unpermitted actions are auto-denied in headless mode and terminate the round immediately.
-- **Start fresh jobs after denials**: Resuming after a denial can wedge the session; grant permission via `agy_permissions` and start a new job.
+- **Live sessions**: every job is a running agy process you keep messaging; follow-ups skip the cold start. A denial ends only that turn — grant the rule and `agy_resume` restarts agy on the same conversation, context kept (agy reads rules only at startup).
 - **Free quota checks**: Running `agy -p "/usage"` queries local CLI quota pools without consuming tokens or model calls.
 - **Active commands avoid stalls**: Long-running commands in `ACTIVE` state are tracked so active test or build runs are not flagged as stalled.
 - **The process can outlive its result**: agy may keep running after emitting its final `result` event, so job state is taken from the result, not from whether the process is alive.
