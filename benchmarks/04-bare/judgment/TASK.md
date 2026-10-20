@@ -1,0 +1,1 @@
+For every file in `tickets/`, write `summaries/<same name>.json` with `{"category": one of ["billing","bug","feature","account","other"], "urgency": 1-3, "summary": "<= 20 words"}`. Then write `summaries/INDEX.md`: one line per ticket, sorted by urgency (3 first).

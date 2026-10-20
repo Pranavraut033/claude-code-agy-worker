@@ -178,7 +178,7 @@ Since v0.4.0 agy runs **bare** and the calling Claude session lends each job exa
 that job only and removes it afterwards. `/agy-worker:agy-setup` does the clean-up for anyone, with a dry run and
 a restore script. We tried running agy from an empty temp folder to dodge a repo's own agy files: it doesn't
 work — with `--add-dir` agy still loads the repo's `GEMINI.md` and rules, and without it agy cannot touch the
-repo. So `agy_start` now reports a repo's agy files instead (`repo_agy_config`). The clean rerun is [benchmark 4](benchmarks/04-bare/PLAN.md): the same two tasks plus one Claude can't script — 30 varied tickets to classify and summarise — run both ways.
+repo. So `agy_start` now reports a repo's agy files instead (`repo_agy_config`). The clean rerun is [benchmark 4](benchmarks/04-bare/RESULTS.md) (§7).
 
 ## 7. Where the savings might really be
 
@@ -197,12 +197,26 @@ The levers that look most promising:
    tasks, and point workers at a shared plan file instead of repeating context.
 4. **Checks without model turns** — *built in v0.3.0*: `agy_start(checks=[…])`; the background
    waiter runs them when agy finishes and prints one verdict (scope, stat, each check, `clean`),
-   so a package should cost about three Claude calls instead of eleven. Not yet measured —
-   [benchmark 3](benchmarks/03-lean/PLAN.md) is the test.
+   so a package should cost about three Claude calls instead of eleven. Measured in
+   [benchmark 4](benchmarks/04-bare/RESULTS.md): orchestrators still made 9–14 calls (a failed
+   Monitor attempt, diff reads, one fix-up), and Claude tokens did not fall below Claude alone.
 
-And the task types still untested, where agy's design should fit best:
+### Benchmark 4: bare agy, and a task Claude can't script
 
-- work Claude **cannot** script: per-file judgment across many varied inputs;
+With agy bare and the verdict loop, all three tasks reached the same quality both ways, and all three still cost
+more Claude tokens with agy: CSV feature 96k → 96k (0.99×), 40-file migration 91k → 108k (1.19×), 30-ticket
+triage 86k → 101k (1.18×). The triage task was meant to be the case for agy, but 30 short tickets fit in one
+read: Claude alone did it in 3 tool calls. The fixed cost of orchestrating (~95–100k for a Sonnet orchestrator)
+is the whole story at this size.
+
+The audit also found a bug in our own guard. It said "Edit ONLY these files: <folder>", and agy took the folder
+for a file list and refused to create the new files, which cost the triage run a wasted round. The server had
+always accepted folders; v0.4.2 fixes the wording, and forbids agy's built-in `invoke_subagent` tool, which it
+called once.
+
+What is left untested, and where agy's design should fit best:
+
+- per-file judgment at a scale that does **not** fit in one Claude read (hundreds of inputs);
 - **reading-heavy research**, where agy reads hundreds of pages and Claude reads a summary (still
   spot-checked — agy's first research report had two load-bearing errors).
 

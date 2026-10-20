@@ -1,0 +1,122 @@
+{
+ "ticket_00.txt": {
+  "category": "account",
+  "urgency": 2
+ },
+ "ticket_01.txt": {
+  "category": "billing",
+  "urgency": 1
+ },
+ "ticket_02.txt": {
+  "category": "feature",
+  "urgency": 2
+ },
+ "ticket_03.txt": {
+  "category": "billing",
+  "urgency": 2
+ },
+ "ticket_04.txt": {
+  "category": "bug",
+  "urgency": 2
+ },
+ "ticket_05.txt": {
+  "category": "other",
+  "urgency": 2
+ },
+ "ticket_06.txt": {
+  "category": "bug",
+  "urgency": 3
+ },
+ "ticket_07.txt": {
+  "category": "billing",
+  "urgency": 3
+ },
+ "ticket_08.txt": {
+  "category": "feature",
+  "urgency": 1
+ },
+ "ticket_09.txt": {
+  "category": "bug",
+  "urgency": 1
+ },
+ "ticket_10.txt": {
+  "category": "other",
+  "urgency": 1
+ },
+ "ticket_11.txt": {
+  "category": "account",
+  "urgency": 1
+ },
+ "ticket_12.txt": {
+  "category": "other",
+  "urgency": 3
+ },
+ "ticket_13.txt": {
+  "category": "feature",
+  "urgency": 1
+ },
+ "ticket_14.txt": {
+  "category": "other",
+  "urgency": 1
+ },
+ "ticket_15.txt": {
+  "category": "other",
+  "urgency": 2
+ },
+ "ticket_16.txt": {
+  "category": "account",
+  "urgency": 2
+ },
+ "ticket_17.txt": {
+  "category": "bug",
+  "urgency": 3
+ },
+ "ticket_18.txt": {
+  "category": "feature",
+  "urgency": 1
+ },
+ "ticket_19.txt": {
+  "category": "other",
+  "urgency": 1
+ },
+ "ticket_20.txt": {
+  "category": "account",
+  "urgency": 3
+ },
+ "ticket_21.txt": {
+  "category": "bug",
+  "urgency": 1
+ },
+ "ticket_22.txt": {
+  "category": "billing",
+  "urgency": 3
+ },
+ "ticket_23.txt": {
+  "category": "feature",
+  "urgency": 3
+ },
+ "ticket_24.txt": {
+  "category": "billing",
+  "urgency": 1
+ },
+ "ticket_25.txt": {
+  "category": "billing",
+  "urgency": 2
+ },
+ "ticket_26.txt": {
+  "category": "account",
+  "urgency": 1
+ },
+ "ticket_27.txt": {
+  "category": "feature",
+  "urgency": 2
+ },
+ "ticket_28.txt": {
+  "category": "billing",
+  "urgency": 2
+ },
+ "ticket_29.txt": {
+  "category": "bug",
+  "urgency": 2
+ }
+}

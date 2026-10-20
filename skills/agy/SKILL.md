@@ -28,7 +28,9 @@ checks — not one file. A lone one-line change rides along in the next package.
 **Too small for agy — do it directly.** A measured benchmark (3 small tasks, n=1): routing them
 through agy cost **+21 % Claude tokens, ×2.4 cumulative input and ×13 wall time** for the same
 quality, because orchestration takes ~11 tool calls (brief, permissions, wait, diff, checks,
-cleanup) and the task alone took 2–5. So, before any `agy_start`:
+cleanup) and the task alone took 2–5. The bare-agy rerun (benchmark 4, v0.4.1 verdict loop) still
+cost 1.0–1.2× Claude tokens on a CSV feature, a 40-file migration and a 30-ticket judgment task:
+Claude alone read all 30 tickets once and finished in 3 calls. So, before any `agy_start`:
 - **Estimate the direct cost:** how many tool calls would this session need to just do it?
   Under ~10 (a rename, a few-file feature, a contained bug fix) → do it yourself, or hold it
   for the next package if one is coming soon anyway.

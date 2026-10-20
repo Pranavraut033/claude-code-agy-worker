@@ -151,6 +151,9 @@ Don't spend it on packages Flash can do — the weekly quota is limited.
 | 2026-10-20 | flash-low | same session, live follow-up edit | 14.1 s | – | clean, no cold start |
 | 2026-10-20 | flash-low | same session: non-allowed command | 4.0 s | – | denied, session survived |
 | 2026-10-20 | flash-low | grant rule, resume → restart on same conversation | 11.5 s | – | ran it; remembered earlier edits |
+| 2026-10-20 | flash-medium | bench 4, bare: CSV feature from a spec | 153 s | 118k tokens | clean, 6/6 |
+| 2026-10-20 | flash-medium | bench 4, bare: 40-file migration + type hints | 1,350 s | 652k tokens, 5-h quota −5 % | clean, 6/6 (state read failed on a final 503) |
+| 2026-10-20 | flash-medium | bench 4, bare: 30-ticket triage, 2 rounds | 302 s | 220k tokens | round 1 wrote nothing (guard wording); 4/4 after fix-up |
 
 ## Changelog
 
@@ -161,3 +164,4 @@ Don't spend it on packages Flash can do — the weekly quota is limited.
 - 2026-10-20: live sessions (agy-worker 0.2.0): stream-json input, follow-ups without cold start, a denial ends only the turn, restart-on-conversation applies new rules; 4 timing rows.
 - 2026-10-20: agy 1.4.3 renamed its file tools (write_file/Path); edit detection made name-tolerant. v0.3.0 server-run checks: one verdict per round (live test: flash-low, 17 s, checks caught the deliberately failing one).
 - 2026-10-20: bare agy (7.2k vs 16.1k tokens per trivial turn); v0.4.0 per-job lend/mcp, agy-setup, verdict checks on every finished round; agy 1.4.3 also uses `edit_file`.
+- 2026-10-20: benchmark 4 (bare, v0.4.1): 3 timing rows; bare baseline 7,075 tokens. v0.4.2 guard: a folder in allowed_files covers new files (agy had read it as a file list), named check lines may contain a pipe, no `invoke_subagent` (agy 1.4.3 has a built-in research subagent).
