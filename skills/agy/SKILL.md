@@ -73,9 +73,12 @@ don't repeat those. Structure the brief (one delimiter style: Markdown headings)
 # Report         per task: done / skipped (why) / check result; files changed
 ```
 
-- **Make checks machine-readable:** each task's check prints pass/fail (tests, a
-  verifier, a lint, or a tiny compare script agy writes and runs). That is what keeps the
-  audit cheap — design the check before the task.
+- **Make checks machine-readable, and hand them to the server.** Each task's check prints
+  pass/fail (tests, a verifier, a lint, a tiny compare script). Pass the final ones as
+  `agy_start(..., checks=["python3 -m unittest discover -s tests", …])`: the waiter runs them
+  itself when agy finishes and puts every result in the verdict, so you spend no turns on
+  them. They run as shell commands with *your* permissions (not agy's allow-list), in `cwd`.
+  Design the check before the task.
 - **Point at exact context** (paths, line ranges, an example record) so agy reads what it
   needs instead of exploring the repo.
 - For research or long findings, name a report file in `allowed_files` and the brief; the
@@ -128,21 +131,25 @@ session survives. agy reads its rules only at startup, so after a denial (`denie
 command): audit what landed, grant the rule (or forbid the command), then `agy_resume` — it
 restarts agy on the same conversation with the new rules, context kept (measured: 11.5 s).
 
-## 4. Monitor a long run — without spending turns
+## 4. The loop: start, wait, read one verdict
 
-Right after `agy_start`, run the `wait_cmd` string that `agy_start` returned as a background shell task (Bash with `run_in_background: true`).
+Three calls per package: `agy_start(…, checks=[…])`; run the returned `wait_cmd` as a
+**background** shell task (Bash with `run_in_background: true`); read the verdict it prints.
+The waiter blocks until the job leaves `running`, runs the checks, and prints one compact JSON
+verdict; the harness wakes you once. Meanwhile do other work or end your turn — no `agy_wait`
+loop, no polling. `agy_status` returns the last verdict again for a finished round. To let the
+user watch live, give them the same command with `watch <job>` instead of `wait <job>`.
 
-It exits when the job leaves `running` (done, stalled, failed) and prints the compact
-status; the harness wakes you once with that output. Meanwhile do other orchestration work
-or end your turn — no `agy_wait` loop, no polling. Use `agy_wait`/`agy_status` only for a
-single look when the user asks how it is going. To watch it themselves, give the user the
-`wait_cmd` path with `watch <job>` instead of `wait <job>` (live step list in their own terminal). Intervene when the result shows:
-- `alert: edits outside allowed_files` (the waiter exits early for this) → `agy_cancel`, audit, decide;
+The verdict has `state`, `elapsed_s`, `tokens`, `quota_drop_pct`, `report`, `edits`, `denied` (naming
+the command), `out_of_scope`, `not_from_agy_edits`, `stat`, each check (`cmd`, `rc`, `ok`, last
+400 chars) and `all_checks_pass`; **`clean`** is true when the round is done, nothing was denied
+or out of scope, and every check passed. Intervene when it shows:
+- `alert: edits outside allowed_files` (the waiter exits early with it) → `agy_cancel`, audit, decide;
 - `stalled` (no event for 5 min) → `agy_cancel`, read `stderr`; Argon thinking quietly for a
   few minutes is normal, a Flash stall usually is not;
-- the same error repeats in its steps (looping), or the same check runs again and again →
-  cancel; if it is the same defect agy already failed twice, fix it yourself (session logs:
-  56 agy-minutes on one label bug that took the orchestrator 5 minutes once it read the code);
+- the same defect failing a second time, or checks run again and again → cancel; if agy
+  already failed it twice, fix it yourself (session logs: 56 agy-minutes on one label bug that
+  took the orchestrator 5 minutes once it read the code);
 - `failed` → read `stderr` (auth, 429/503, timeout) and retry once if transient; a quota
   or "AI credits balance is too low" error is not transient → `agy_usage()`, then switch
   model family or wait for the reset it shows.
@@ -150,10 +157,11 @@ single look when the user asks how it is going. To watch it themselves, give the
 ## 5. Audit each package — never trust agy's report
 
 Audit in tiers — the expensive reading goes where errors would hurt:
-1. **Mechanical gates (cheap, always):** `agy_diff(job)` → `out_of_scope` empty or
-   justified (else `agy_discard(job, files=[…])`); `not_from_agy_edits` checked before
-   touching; `denied` empty (a check that didn't run is **unverified**). Re-run the
-   package's checks yourself — they should print pass/fail, so you read one line.
+1. **Mechanical gates (free, already in the verdict):** `out_of_scope` empty or justified
+   (else `agy_discard(job, files=[…])`); `not_from_agy_edits` looked at before touching
+   (other sessions edit the tree too); `denied` empty (a check that didn't run is
+   **unverified**); `all_checks_pass`. Do not re-run the checks yourself — the verdict ran
+   them. `clean: true` plus the `stat` line is enough to decide what to read next.
 2. **Read `stat`, then diff selectively** with `agy_diff(job, files=[…])`:
    - **Full read:** anything factual (numbers, quotes, citations, dates), anything viewers
      or users see (scripts, titles, captions), security-relevant code, and the first file
@@ -192,12 +200,15 @@ granted exactly.
   needed). One phase per session: when a phase ends, write the handoff into the project's
   STATE file (packages done, audit results, what's next) and suggest a fresh session for
   the next phase. Routine orchestration runs fine on Sonnet; tell the user when a phase
-  is routine enough to switch.
+  is routine enough to switch — **at the start of a session, not in the middle**: the
+  prompt cache is per model, so switching mid-session makes the next turn re-read the whole
+  conversation uncached, and so does a long idle gap (past the cache lifetime). Server-run
+  `checks` and the verdict are what keep a package at about three calls.
 - **agy:** Flash by default (Argon used 5–10× the tokens per job); exact context paths so
   it doesn't explore; every needed command granted up front (a denial wastes the round);
   packages sized 10–60 min so cold starts and briefs amortise; send dependent packages and
   fix-ups to the same live session (no cold start, context cached).
-- **Neither side** does work twice: agy's checks feed your audit, your audit findings go
+- **Neither side** does work twice: the server runs the checks once and the verdict feeds your audit, your audit findings go
   into one consolidated fix-up message.
 
 ## 7. Finish

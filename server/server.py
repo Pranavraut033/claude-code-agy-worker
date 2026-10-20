@@ -188,6 +188,12 @@ def _events(m, n):
     return out
 
 
+def _is_write(tool):
+    """agy renamed its file tools between versions (write_to_file -> write_file in 1.4.3), so
+    besides the known names, any tool whose name says write/edit/replace counts as an edit."""
+    return tool in WRITE_TOOLS or bool(re.search(r"write|edit|replace", tool or ""))
+
+
 def _parse(m):
     """Fold every round's events into what agy did."""
     edits, commands, steps, denied = [], [], [], []
@@ -200,12 +206,12 @@ def _parse(m):
             s = e.get("step_update")
             if s and s.get("step_type") == "tool":
                 params = (s.get("tool_info") or {}).get("parameters") or {}
-                target = params.get("TargetFile") or params.get("AbsolutePath") or \
+                target = params.get("TargetFile") or params.get("AbsolutePath") or params.get("Path") or \
                     params.get("CommandLine") or params.get("Url") or params.get("query") or ""
                 steps.append({"round": r["n"], "tool": s.get("tool_name"), "state": s.get("state"),
                               "target": target})
                 if s.get("state") == "DONE":
-                    if s.get("tool_name") in WRITE_TOOLS and target:
+                    if _is_write(s.get("tool_name")) and target:
                         target = os.path.realpath(target)  # symlinked paths vs git's real ones
                         if target not in edits:
                             edits.append(target)
@@ -267,13 +273,17 @@ mcp = MCPServer("agy-worker", instructions=(
 
 @mcp.tool()
 def agy_start(brief: str, cwd: str, allowed_files: list[str], model: str = DEFAULT_MODEL,
-              timeout_s: int = 3600, network: bool = False) -> dict:
+              timeout_s: int = 3600, network: bool = False, checks: list[str] | None = None,
+              check_timeout_s: int = 600) -> dict:
     """Start agy on a work package (several related tasks), in place in `cwd` (absolute path). `brief` says the
     exact change, what done means, and which checks to run. `allowed_files` are the only
     paths agy may edit (absolute, or relative to cwd; a directory or a glob also works).
     The brief is wrapped in a guard preamble. network=True lets a research job browse and
-    download (it must stop on 401/403/429/CAPTCHA). Returns {job, git, wait_cmd} immediately
-    (run wait_cmd as a background shell task)."""
+    download (it must stop on 401/403/429/CAPTCHA). `checks` are shell commands (your own, run
+    in `cwd` with your permissions, not agy's) the waiter runs when agy finishes: you then get
+    one verdict with scope, stat and each check's result instead of spending turns on them.
+    Returns {job, git, wait_cmd} immediately: run wait_cmd as a background shell task and read
+    the verdict it prints."""
     cwd = os.path.realpath(os.path.expanduser(cwd))
     if not os.path.isdir(cwd):
         return {"error": f"cwd {cwd} is not a directory"}
@@ -284,19 +294,62 @@ def agy_start(brief: str, cwd: str, allowed_files: list[str], model: str = DEFAU
     m = {"id": time.strftime("%m%d-%H%M%S-") + uuid.uuid4().hex[:4], "cwd": cwd,
          "top": str(top) if top else None, "base": snapshot(top) if top else None,
          "allowed": [os.path.realpath(a) for a in allowed], "model": model,
-         "timeout_s": timeout_s, "brief": brief, "network": network, "rounds": [], "created": time.time()}
+         "timeout_s": timeout_s, "brief": brief, "network": network, "rounds": [], "created": time.time(),
+         "checks": checks or [], "check_timeout_s": check_timeout_s}
     pools = _usage_pools(model)
     m["quota_before"] = {f'{p["pool"]} · {p["window"]}': p["left_pct"] for p in pools}
     (JOBS / m["id"]).mkdir(parents=True)
     _launch(m, _guard(m, brief))
-    out = {"job": m["id"], "git": bool(top),
-           "wait_cmd": f"{shutil.which('uv') or 'uv'} run --script {Path(__file__).resolve()} wait {m['id']}"}
+    out = {"job": m["id"], "git": bool(top), "wait_cmd": _wait_cmd(m["id"])}
     if not top:
         out["warning"] = "not a git repo: agy_diff and agy_discard cannot work for this job"
     low = [p for p in pools if p["left_pct"] < LOW_PCT]
     if low:
         out["quota_low"] = low
     return out
+
+
+def _wait_cmd(job):
+    return f"{shutil.which('uv') or 'uv'} run --script {Path(__file__).resolve()} wait {job}"
+
+
+def _run_checks(m):
+    """Run the job's checks the way the orchestrator would in a shell. ponytail: sequential, no sandbox
+    (they are the orchestrator's own commands, with its permissions)."""
+    out = []
+    for cmd in m.get("checks") or []:
+        try:
+            r = subprocess.run(cmd, shell=True, cwd=m["cwd"], capture_output=True, text=True,
+                               timeout=m.get("check_timeout_s", 600), stdin=subprocess.DEVNULL)
+            rc, tail = r.returncode, (r.stdout + r.stderr).strip()[-400:]
+        except subprocess.TimeoutExpired:
+            rc, tail = "timeout", f"no result after {m.get('check_timeout_s', 600)} s"
+        except OSError as e:  # e.g. the job's folder is gone
+            rc, tail = "error", str(e)
+        out.append({"cmd": cmd[:160], "rc": rc, "ok": rc == 0, "tail": tail})
+    return out
+
+
+def _verdict(job):
+    """One compact answer for a finished round: state, cost, scope, stat, each check. `clean` means
+    done, nothing denied, nothing outside allowed_files and every check passed; `not_from_agy_edits`
+    is listed apart because other sessions legitimately edit the same tree."""
+    m = _load(job)
+    st = agy_status(job)
+    v = {k: st.get(k) for k in ("job", "state", "round", "elapsed_s", "tokens", "quota_drop_pct",
+                                "denied", "edits", "hint", "stderr") if st.get(k) not in (None, [], {})}
+    v["report"] = (st.get("report") or "")[:1200] or None
+    if m.get("top"):
+        d = agy_diff(job, max_chars=0)
+        v.update(out_of_scope=d["out_of_scope"], not_from_agy_edits=d["not_from_agy_edits"],
+                 stat=d["stat"].strip().splitlines()[-1:] or ["no changes"])
+    checks = _run_checks(m) if st["state"] == "done" else []  # no point checking a failed round
+    v["checks"] = checks
+    v["all_checks_pass"] = all(c["ok"] for c in checks) if checks else None
+    v["clean"] = (st["state"] == "done" and not v.get("denied") and not v.get("out_of_scope")
+                  and v["all_checks_pass"] is not False)
+    (JOBS / job / f"verdict-r{st['round']}.json").write_text(json.dumps(v))
+    return v
 
 
 def _parse_usage(text):
@@ -393,6 +446,9 @@ def agy_status(job: str | None = None, steps: int = 5, full_report: bool = False
            "edits": [_rel(m, e) for e in edits], "commands": [c[:120] for c in commands],
            "denied": denied, "report": report or None,
            "tokens": (result or {}).get("_tokens"), "session": "open" if _live(m) else "closed"}
+    vf = JOBS / job / f"verdict-r{n}.json"
+    if vf.exists() and state != "running":
+        out["verdict"] = json.loads(vf.read_text())
     if state != "running" and m.get("quota_before"):
         if "quota_after" not in m:  # one /usage call per finished job
             m["quota_after"] = {f'{p["pool"]} · {p["window"]}': p["left_pct"] for p in _usage_pools(m["model"])}
@@ -451,11 +507,12 @@ def agy_diff(job: str, files: list[str] | None = None, max_chars: int = 6000) ->
 
 
 @mcp.tool()
-def agy_resume(job: str, message: str) -> dict:
+def agy_resume(job: str, message: str, checks: list[str] | None = None) -> dict:
     """Next message to the job's agy session: a fix-up round or the next package in the same
     context (the guard rules and allowed files are restated). A live session takes it in ~2-3 s;
     after a denial (agy reads rules only at startup) or a server restart, agy is restarted on
-    the same conversation, context kept. The diff baseline stays the original snapshot."""
+    the same conversation, context kept. The diff baseline stays the original snapshot.
+    `checks` replaces the job's checks for this round. Returns wait_cmd, like agy_start."""
     m = _load(job)
     *_, result = _parse(m)
     if _state(m, result) == "running":
@@ -463,6 +520,8 @@ def agy_resume(job: str, message: str) -> dict:
     if not m.get("conversation"):
         return {"error": "no conversation id recorded for this job; start a new one"}
     m.pop("cancelled", None)
+    if checks is not None:
+        m["checks"] = checks
     if _live(m) and not (result or {}).get("_denied_now"):
         _send(m, _guard(m, message))
         how = "live"
@@ -470,7 +529,7 @@ def agy_resume(job: str, message: str) -> dict:
         _close(m)
         _launch(m, _guard(m, message), m["conversation"])
         how = "restarted"
-    return {"job": job, "round": len(m["rounds"]), "session": how}
+    return {"job": job, "round": len(m["rounds"]), "session": how, "wait_cmd": _wait_cmd(job)}
 
 
 @mcp.tool()
@@ -634,6 +693,30 @@ def selftest():
     (JOBS / "t_ses/r2.jsonl").write_text(json.dumps(res) + "\n")  # same cumulative denial again
     _, _, _, den, result = _parse(m2)
     assert len(den) == 1 and result["_tokens"] == 10 and not result["_denied_now"], (den, result)
+    # agy 1.4.3 names: write_file with a Path parameter counts as an edit
+    mw = {"id": "t_w", "cwd": "/x", "top": None, "base": None, "allowed": [], "model": "x", "timeout_s": 1,
+          "brief": "", "pid": -1, "seg": 1, "rounds": [{"n": 1, "started": 0, "seg": 1}]}
+    (JOBS / "t_w").mkdir(parents=True); _save(mw)
+    (JOBS / "t_w/r1.jsonl").write_text(json.dumps({"event": "step_update", "step_update": {
+        "step_type": "tool", "state": "DONE", "tool_name": "write_file",
+        "tool_info": {"parameters": {"Path": "/x/a.txt"}}}}) + "\n")
+    assert _parse(mw)[0] == [os.path.realpath("/x/a.txt")], _parse(mw)[0]
+    # a finished round with two checks: one passes, one fails -> one verdict says so
+    (JOBS / "t_v").mkdir(parents=True)
+    mv = {**m2, "id": "t_v", "cwd": str(JOBS.parent), "checks": ["true", "echo boom; false"], "rounds": [{"n": 1, "started": 0, "seg": 1}],
+          "created": 0, "top": None}  # not a git repo here: scope fields are skipped
+    _save(mv)
+    (JOBS / "t_v/r1.jsonl").write_text(json.dumps({"event": "result", "result": {
+        "status": "SUCCESS", "response": "1. done", "usage": {"total_tokens": 5}}}) + "\n")
+    (JOBS / "t_v/s1.err").write_text("")
+    v = _verdict("t_v")
+    assert v["state"] == "done" and v["all_checks_pass"] is False and not v["clean"], v
+    assert [c["rc"] for c in v["checks"]] == [0, 1] and "boom" in v["checks"][1]["tail"], v
+    assert agy_status("t_v")["verdict"]["all_checks_pass"] is False  # status returns it for the round
+    mv["cwd"] = "/nonexistent-dir"; _save(mv)
+    assert _run_checks(mv)[0]["rc"] == "error"  # a vanished folder is reported, not raised
+    mv["cwd"] = str(JOBS.parent); mv["checks"] = ["true"]; _save(mv)
+    assert _verdict("t_v")["clean"] is True
     shutil.rmtree(JOBS.parent)
     allow = ["command(grep )", "command(regex:npm run (build|lint))", "command(python3 b.py --only=g)"]
     c = {x["command"]: x["allowed"] for x in _check_rules(
@@ -645,9 +728,9 @@ def selftest():
 
 
 def wait_cli(job, max_s=7200):
-    """`server.py wait <job> [max_s]`: block until the job leaves "running", then print its
-    compact status as JSON. Run it as a background shell task so the orchestrator is woken
-    once at the end instead of spending a turn per agy_wait. ponytail: 15 s poll."""
+    """`server.py wait <job> [max_s]`: block until the job leaves "running", run the job's checks,
+    then print one compact verdict as JSON. Run it as a background shell task so the
+    orchestrator is woken once, with everything it needs to audit. ponytail: 15 s poll."""
     m, end = _load(job), time.time() + max_s
     while time.time() < end and agy_status(job)["state"] == "running":
         stray = [e for e in _parse(m)[0] if not _allowed(m, e)]
@@ -656,7 +739,7 @@ def wait_cli(job, max_s=7200):
                               "stray": [_rel(m, e) for e in stray]}, indent=1))
             return
         time.sleep(15)
-    print(json.dumps(agy_status(job), indent=1))
+    print(json.dumps(_verdict(job), indent=1))
 
 
 def watch_cli(job=None):
@@ -677,7 +760,8 @@ def watch_cli(job=None):
     icons = {"view_file": ("📄", "dim"), "list_dir": ("📁", "dim"), "grep_search": ("🔍", "dim"),
              "search_web": ("🔎", "cyan"), "read_url_content": ("🌐", "cyan"),
              "run_command": ("▶", "yellow"), "command_status": ("⏱", "dim")}
-    icons.update({t: ("✎", "green") for t in WRITE_TOOLS})
+    icons.update({t: ("✎", "green") for t in WRITE_TOOLS | {"write_file"}})
+    icons.update({"read_file": ("📄", "dim")})
     first = next((ln for ln in m["brief"].splitlines() if ln.strip() and not ln.startswith("#")), "")
     con.print(Panel(Text.assemble((f"{job}\n", "bold"), (f"{m['model']}  ·  {m['cwd'].replace(str(Path.home()), '~')}\n", "cyan"),
                                   (first[:110], "dim")), title="agy job", border_style="blue", expand=False))

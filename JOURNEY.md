@@ -180,8 +180,10 @@ The levers that look most promising:
    running checks is mechanical — Haiku can do it; the strong model returns only to audit.
 3. **Batching** (from Claude Code's plan-and-delegate pattern): pay the fixed cost once for several
    tasks, and point workers at a shared plan file instead of repeating context.
-4. **Checks without model turns** — hooks or the server itself running the package's tests and
-   returning one pass/fail line.
+4. **Checks without model turns** — *built in v0.3.0*: `agy_start(checks=[…])`; the background
+   waiter runs them when agy finishes and prints one verdict (scope, stat, each check, `clean`),
+   so a package should cost about three Claude calls instead of eleven. Not yet measured —
+   [benchmark 3](benchmarks/03-lean/PLAN.md) is the test.
 
 And the task types still untested, where agy's design should fit best:
 

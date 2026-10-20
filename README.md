@@ -6,7 +6,7 @@
 
 A Claude Code plugin that hands long, multi-task work packages to the Antigravity CLI (`agy`) and audits every change it makes.
 
-![version](https://img.shields.io/badge/version-0.2.0-blue) [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE) ![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-D97757?logo=anthropic&logoColor=white) ![Antigravity CLI](https://img.shields.io/badge/Antigravity_CLI-1.4.2-4285F4?logo=google&logoColor=white) ![MCP](https://img.shields.io/badge/MCP-server-8A2BE2) ![python](https://img.shields.io/badge/python-3.10%2B_·_uv-3776AB?logo=python&logoColor=white) ![platform](https://img.shields.io/badge/tested_on-macOS-lightgrey?logo=apple)
+![version](https://img.shields.io/badge/version-0.3.0-blue) [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE) ![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-D97757?logo=anthropic&logoColor=white) ![Antigravity CLI](https://img.shields.io/badge/Antigravity_CLI-1.4.2-4285F4?logo=google&logoColor=white) ![MCP](https://img.shields.io/badge/MCP-server-8A2BE2) ![python](https://img.shields.io/badge/python-3.10%2B_·_uv-3776AB?logo=python&logoColor=white) ![platform](https://img.shields.io/badge/tested_on-macOS-lightgrey?logo=apple)
 
 **📖 New here? Read [the journey](JOURNEY.md)** — why we built this, what broke, and what the benchmarks really showed.
 
@@ -14,19 +14,20 @@ A Claude Code plugin that hands long, multi-task work packages to the Antigravit
 
 ## ⚡ How it works
 
-Claude Code plans work packages, monitors progress through a background waiter, and audits every diff. agy runs headlessly in place to execute mechanical file edits and run checks.
+Claude Code plans work packages and starts them; a background waiter runs your checks when agy finishes and hands back one verdict (scope, stat, check results), so Claude spends about three calls per package and reads diffs only where it matters. agy runs headlessly in place to execute mechanical file edits and run checks.
 
 ```mermaid
 sequenceDiagram
     participant Claude as Claude Code (orchestrator)
     participant W as agy-worker
     participant A as agy (Gemini)
-    Claude->>W: agy_start(brief, allowed_files)
+    Claude->>W: agy_start(brief, allowed_files, checks)
     W->>W: git snapshot (HEAD & index untouched)
     W->>A: launch headless, accept-edits
     A->>A: edit files, run checks
-    W-->>Claude: background waiter wakes Claude
-    Claude->>W: agy_diff — scope check + audit
+    W->>W: waiter runs the checks
+    W-->>Claude: one verdict: scope, stat, checks
+    Claude->>W: agy_diff — read only what matters
     Claude->>A: agy_resume — next message, same live session
     Claude->>W: agy_discard — revert anything bad (optional)
 ```
@@ -67,7 +68,7 @@ A header panel, one line per step with an icon (📄 read · ✎ edit · ▶ com
 
 | Tool | Description |
 |---|---|
-| `agy_start` | Start agy on a work package in place in cwd. |
+| `agy_start` | Start agy on a work package in place in cwd; `checks=[…]` run by the waiter when it finishes. |
 | `agy_status` | One job's progress: compact state, steps, edits, commands, denied actions, report. |
 | `agy_wait` | Block until job finishes or stalls; returns agy_status. |
 | `agy_diff` | Audit changed files against snapshot, out-of-scope edits, denied actions, diff. |
