@@ -16,7 +16,7 @@ A Claude Code plugin that hands long, multi-task work packages to the Antigravit
 
 Claude Code plans a work package, writes the brief and machine checks, and starts it. By default it then **hands off**: you follow the run live with `watch`, which ends with each check, `clean`, and the diff command; Claude reads one verdict (done or not, checks, scope, plus a short diff sample) as a light audit. A full diff audit by Claude happens only when you ask. agy runs headlessly in place.
 
-**Opt-in, not a token saver.** Four benchmarks found no Claude-token saving (see [Benchmark](#-benchmark)). Use agy when Claude's usage limit is nearly spent (Gemini is a separate pool), for long unattended runs, or for volume too large for one Claude read.
+**Opt-in.** Per fresh run, five benchmarks found no Claude-token saving; within a session that has already loaded the skill, a hand-off job adds 0.15–0.67× the new tokens of doing the work (see [Benchmark](#-benchmark)). Use agy when Claude's usage limit is nearly spent (Gemini is a separate pool), for long unattended runs, or for volume too large for one Claude read.
 
 ```mermaid
 sequenceDiagram
@@ -124,21 +124,21 @@ The rows above ran with agy's own MCP servers, skills and plugins loaded into ev
 
 [Benchmark 5](benchmarks/05-handoff/RESULTS.md) (v0.5.0) reran the same three tasks in **hand-off mode** (Claude reads one verdict, no diff reads): CSV 96k (0.99× Claude alone), migration 105k (1.15×), triage 95k (1.11×), all hidden checks passing. Skipping the diff reads saved only 1–6k against full audit.
 
-**Real-use estimate.** Every benchmark run started at ~70k tokens of fixed context (system prompt, tools, CLAUDE.md, memory), the same in both arms; in real use your open session has already paid that. Removing it, and the one-time skill read (~5k) from the agy arms, leaves what each task added:
+**Real-use estimate.** The totals above are per fresh subagent. Measured from the transcripts, each run starts at ~70k tokens (system prompt, tools, CLAUDE.md, memory) in both arms, and the agy arms then spend ~20k loading the skill and the agy tool definitions. In a real session both are paid once per session, not per job. What each job added after that:
 
 | Task | Claude alone | agy, full audit | agy, hand-off |
 |---|---|---|---|
-| CSV feature | 25k | 20k (0.78×) | 19k (0.74×) |
-| 40-file migration | 20k | 33k (1.62×) | 29k (1.42×) |
-| 30-ticket triage | 15k | 25k (1.66×) | 19k (1.25×) |
+| CSV feature | 25k | 4.8k (0.19×) | 3.7k (0.15×) |
+| 40-file migration | 20k | 17.6k (0.88×) | 13.4k (0.67×) |
+| 30-ticket triage | 15k | 10.0k (0.67×) | 3.6k (0.24×) |
 
-So agy saves on the CSV feature (~6k) and costs more on the other two: Claude alone scripted the migration in 7 calls and read all 30 tickets in one. This counts context growth only; in a long real session every extra tool call also re-reads the whole (cached) context, which favours fewer calls (Claude alone: 3–7, hand-off: 5–16).
+So **once the skill is loaded, a hand-off job adds far less new context than doing the work**, and Claude does not have to handhold agy for that. Two costs remain: the ~20k setup in each session (the first job roughly breaks even, later jobs save), and per-call re-reads, since in a long session every tool call re-reads the whole session from cache at ~0.1× the input price. Hand-off took 4 calls on two tasks; on the migration the orchestrator polled with `agy_wait` and took 15. These are estimates from n = 1 runs, not a measured real-session benchmark.
 
-agy **still costs** Claude tokens, even on the judgment task: orchestration (brief, wait, verdict, audit) has a fixed cost of ~95–100k, and Claude alone is cheap at anything that fits in one read — it triaged all 30 tickets in 3 tool calls. The skill therefore keeps small work in Claude ("too small for agy"). Where agy can still pay: packages long enough that Claude would otherwise spend many turns waiting (renders, build chains), and keeping your Claude session limit free while Gemini does the hours of work. Untested: reading-heavy research, and tasks far larger than one context. Plans, fixtures, checks and raw numbers: [`benchmarks/`](benchmarks/); the full story, including 22 jobs of real project use: [JOURNEY.md](JOURNEY.md).
+Per fresh run, agy **still costs** Claude tokens: the setup outweighs the job, and Claude alone is cheap at anything that fits in one read (it triaged all 30 tickets in 3 tool calls). The skill therefore keeps one-off small work in Claude ("too small for agy"). Where agy can still pay: packages long enough that Claude would otherwise spend many turns waiting (renders, build chains), and keeping your Claude session limit free while Gemini does the hours of work. Untested: reading-heavy research, and tasks far larger than one context. Plans, fixtures, checks and raw numbers: [`benchmarks/`](benchmarks/); the full story, including 22 jobs of real project use: [JOURNEY.md](JOURNEY.md).
 
 ## 🧭 Status and next steps
 
-**Paused at v0.5.1.** Five benchmarks: no Claude-token saving, equal quality, much slower. It stays opt-in and useful for:
+**Paused at v0.5.1.** Five benchmarks: equal quality, much slower; no saving per fresh run, but in a session with the skill loaded, hand-off jobs add 0.15–0.67× the tokens of doing the work. It stays opt-in and useful for:
 
 - 🔋 **Claude limit nearly spent**: Gemini quota is a separate pool.
 - ⏳ **Long unattended runs**: renders, build chains, long test suites; Claude reads one verdict at the end.
