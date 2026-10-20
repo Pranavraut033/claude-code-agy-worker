@@ -6,7 +6,7 @@
 
 A Claude Code plugin that hands long, multi-task work packages to the Antigravity CLI (`agy`) and audits every change it makes.
 
-![version](https://img.shields.io/badge/version-0.5.2-blue) [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE) ![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-D97757?logo=anthropic&logoColor=white) ![Antigravity CLI](https://img.shields.io/badge/Antigravity_CLI-1.4.3-4285F4?logo=google&logoColor=white) ![MCP](https://img.shields.io/badge/MCP-server-8A2BE2) ![python](https://img.shields.io/badge/python-3.10%2B_·_uv-3776AB?logo=python&logoColor=white) ![platform](https://img.shields.io/badge/tested_on-macOS-lightgrey?logo=apple)
+![version](https://img.shields.io/badge/version-0.5.3-blue) [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE) ![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-D97757?logo=anthropic&logoColor=white) ![Antigravity CLI](https://img.shields.io/badge/Antigravity_CLI-1.4.3-4285F4?logo=google&logoColor=white) ![MCP](https://img.shields.io/badge/MCP-server-8A2BE2) ![python](https://img.shields.io/badge/python-3.10%2B_·_uv-3776AB?logo=python&logoColor=white) ![platform](https://img.shields.io/badge/tested_on-macOS-lightgrey?logo=apple)
 
 **📖 New here? Read [the journey](JOURNEY.md)** — why we built this, what broke, and what the benchmarks really showed.
 
@@ -82,15 +82,15 @@ A header panel, one line per step with an icon (📄 read · ✎ edit · ▶ com
 
 | Tool | Description |
 |---|---|
-| `agy_start` | Start agy on a work package in place in cwd; `checks=[…]` run by the waiter; `lend=[…]` skills and `mcp=[…]` servers borrowed from Claude for this job; `handoff=True` returns `watch_cmd` for you and ends the agy session after the round. |
-| `agy_status` | One job's progress: compact state, steps, edits, commands, denied actions, report. |
+| `agy_start` | Start agy on a work package in place in cwd; `checks=[…]` run by the waiter; `lend=[…]` skills and `mcp=[…]` servers borrowed from Claude for this job; `handoff=True` returns `watch_cmd` for you and ends the agy session after the round; `outputs=[…]` names files the brief's commands generate, so they don't count against `clean`. |
+| `agy_status` | One job's progress: compact state, steps, edits, commands, denied actions, and agy's final per-task report (progress chatter dropped). With no job, lists recent jobs. |
 | `agy_wait` | Block until job finishes or stalls; returns agy_status. |
 | `agy_diff` | Audit changed files against snapshot, out-of-scope edits, denied actions, diff. |
 | `agy_resume` | Next message to the job's live agy session (fix-up or next package), ~2–3 s overhead; restarts with new rules after a denial. |
 | `agy_close` | End a job's agy session once its work is audited. |
 | `agy_cancel` | Kill a running job and terminate its process group. |
 | `agy_discard` | Restore files from the pre-job snapshot; delete agy-created files. |
-| `agy_permissions` | Read or edit agy's allow-list; `check=[…]` tests a brief's commands first. |
+| `agy_permissions` | Read or edit agy's allow-list; `check=[…]` tests a brief's commands first. Edits and checks get a compact reply; call it with no arguments for the whole list. |
 | `agy_usage` | Check remaining 5-hour and weekly quota pools and reset times. |
 
 ## 🛡️ Safety
@@ -100,6 +100,7 @@ A header panel, one line per step with an icon (📄 read · ✎ edit · ▶ com
 - **Guard preamble**: Every brief constrains agy to `allowed_files` and prohibits state-changing git commands, package installs, and file deletions.
 - **Audit & discard**: `agy_diff` flags out-of-scope or unrecorded edits; `agy_discard` restores files cleanly from the pre-job snapshot.
 - **An allowed test command runs any code agy writes.** `python3 -m unittest` or `pytest` imports test files, `__init__.py` and conftest, so agy can put a script in one of them and the allow-list never sees it. In benchmark 5 agy did exactly that: it migrated 78 files with a script hidden in `__init__.py`, then removed it. The guard forbids this, and the verdict now marks such files as `unattributed` (changed with no agy edit step), which makes `clean` false. Treat granting a test runner as granting code execution inside the repo.
+- **A declined `agy_start` can still run.** Once, the Claude desktop app sent the call to the server before the user declined it, and agy ran the whole job. The skill tells Claude to run `agy_status()` after a rejected or failed start and cancel any job it finds.
 - **Safe snapshots & no commits**: Snapshots use a throwaway `GIT_INDEX_FILE` without touching `HEAD` or index; agy commits nothing.
 
 ## 🧠 Choosing a model

@@ -194,6 +194,9 @@ report in ≤3 lines: **done or not** (`state`, `clean`, each check, `out_of_sco
 the brief asked? **`unattributed` not empty** means files changed with no agy edit step: another
 session, or agy ran code it wrote through an allowed command (it once hid a migration script in
 `__init__.py` and ran it via the test runner). Say so to the user and read one of those files.
+**Name what the brief's commands generate in `outputs=[…]`** (a renderer's timeline, a log, a
+mix): those files are then neither `unattributed` nor out of scope, so `clean` stays meaningful
+for generator jobs (without it every such job reads unclean).
 Read nothing else unless the verdict or the sample flags a problem. Then end
 your turn; the agy session has already ended (`agy_resume` restarts it on the same conversation
 if the user wants a fix-up). That is ~3 calls and one small read.
@@ -208,7 +211,13 @@ verdict; the harness wakes you once. Meanwhile do other work or end your turn �
 loop, no polling. `agy_status` returns the last verdict again for a finished round. To let the
 user watch live, give them `watch_cmd`.
 
-The verdict has `state`, `elapsed_s`, `tokens`, `quota_drop_pct`, `report`, `edits`, `denied` (naming
+**If an `agy_start` call comes back rejected or as an error**, run `agy_status()` (no job) before
+saying nothing started: the desktop app has run a call the user then declined (the server got it
+0.6 s after the call, the rejection came 3.6 s later), and agy ran the whole job. `agy_cancel`
+any job from the last minute whose brief is yours, unless the user wants it.
+
+`report` is agy's final per-task block only (its progress chatter is dropped, paths are relative;
+the raw text stays in the job's `r*.jsonl`). The verdict has `state`, `elapsed_s`, `tokens`, `quota_drop_pct`, `report`, `edits`, `denied` (naming
 the command), `out_of_scope`, `not_from_agy_edits`, `stat`, `sample` (one changed file's diff, capped), each check (`cmd`, `rc`, `ok`, last
 400 chars) and `all_checks_pass`; **`clean`** is true when the round is done, nothing was denied
 or out of scope, and every check passed. Intervene when it shows:

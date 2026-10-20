@@ -84,7 +84,11 @@ def _guard(m, brief):
     if m.get("borrowed_mcp"):
         lent += "### MCP servers you may use\n" + ", ".join(m["borrowed_mcp"]) + "\n\n"
     lent = f"LENT BY THE ORCHESTRATOR — follow these for this package\n\n{lent}" if lent else ""
-    return GUARD.format(files=", ".join(m["allowed"]), network=net, brief=brief, lent=lent)
+    files = ", ".join(m["allowed"])
+    if m.get("outputs"):
+        files += (". The commands you run also write these; never edit them with your file tools: "
+                  + ", ".join(m["outputs"]))
+    return GUARD.format(files=files, network=net, brief=brief, lent=lent)
 
 
 def _skill(item, top):
@@ -377,9 +381,9 @@ def _state(m, result):
     return "failed"
 
 
-def _allowed(m, path):
+def _allowed(m, path, key="allowed"):
     p = os.path.realpath(path)
-    for a in m["allowed"]:
+    for a in m.get(key) or []:
         if p == a or p.startswith(a.rstrip("/") + "/") or fnmatch.fnmatch(p, a):
             return True
     return False
@@ -399,7 +403,8 @@ mcp = MCPServer("agy-worker", instructions=(
 def agy_start(brief: str, cwd: str, allowed_files: list[str], model: str = DEFAULT_MODEL,
               timeout_s: int = 3600, network: bool = False, checks: list[str] | None = None,
               check_timeout_s: int = 600, lend: list[str] | None = None,
-              mcp: list[str] | None = None, handoff: bool = False) -> dict:
+              mcp: list[str] | None = None, handoff: bool = False,
+              outputs: list[str] | None = None) -> dict:
     """Start agy on a work package (several related tasks), in place in `cwd` (absolute path). `brief` says the
     exact change, what done means, and which checks to run. `allowed_files` are the only
     paths agy may edit (absolute, or relative to cwd; a directory or a glob also works).
@@ -414,7 +419,9 @@ def agy_start(brief: str, cwd: str, allowed_files: list[str], model: str = DEFAU
     Returns {job, git, wait_cmd, watch_cmd} immediately: run wait_cmd as a background shell task and
     read the verdict it prints. `handoff=True`: the owner audits, not you — give them watch_cmd (a
     live view that ends with the checks and the verdict) and end your turn; the agy session ends by
-    itself after this round (agy_resume restarts it on the same conversation)."""
+    itself after this round (agy_resume restarts it on the same conversation). `outputs`: files, folders
+    or globs the brief's commands write (a renderer's timeline, a log, a mix); they are not flagged as
+    unattributed or out of scope, and agy is told not to edit them with its file tools."""
     cwd = os.path.realpath(os.path.expanduser(cwd))
     if not os.path.isdir(cwd):
         return {"error": f"cwd {cwd} is not a directory"}
@@ -426,7 +433,8 @@ def agy_start(brief: str, cwd: str, allowed_files: list[str], model: str = DEFAU
          "top": str(top) if top else None, "base": snapshot(top) if top else None,
          "allowed": [os.path.realpath(a) for a in allowed], "model": model,
          "timeout_s": timeout_s, "brief": brief, "network": network, "rounds": [], "created": time.time(),
-         "checks": checks or [], "check_timeout_s": check_timeout_s}
+         "checks": checks or [], "check_timeout_s": check_timeout_s,
+         "outputs": [os.path.realpath(o if os.path.isabs(o) else os.path.join(cwd, o)) for o in outputs or []]}
     try:
         m["lent_text"] = [_skill(i, m["top"] or cwd) for i in (DEFAULT_LEND if lend is None else lend)]
     except FileNotFoundError as e:
@@ -486,15 +494,17 @@ def _verdict(job):
     st = agy_status(job)
     v = {k: st.get(k) for k in ("job", "state", "round", "elapsed_s", "tokens", "quota_drop_pct",
                                 "denied", "edits", "agy_error", "hint", "stderr") if st.get(k) not in (None, [], {})}
-    v["report"] = (st.get("report") or "")[:1200] or None
+    v["report"] = (st.get("report") or "")[:2500] or None
     if m.get("top"):
         d = agy_diff(job, max_chars=0)
         v.update(out_of_scope=d["out_of_scope"], not_from_agy_edits=d["not_from_agy_edits"],
                  stat=d["stat"].strip().splitlines()[-1:] or ["no changes"])
         # changed inside the package without an agy edit step: another session, or agy running code it
         # wrote (benchmark 5: a migration script hidden in __init__.py, run via the allowed test command)
-        v["unattributed"] = [f for f in d["not_from_agy_edits"] if _allowed(m, _abs(m, f))]
-        changed = [f for f in d["changed"] if f not in d["out_of_scope"]]
+        # declared outputs are expected to change without an edit step (Ep 3: every generator job read unclean)
+        v["unattributed"] = [f for f in d["not_from_agy_edits"]
+                             if _allowed(m, _abs(m, f)) and not _allowed(m, _abs(m, f), "outputs")]
+        changed = [f for f in d["changed"] if f not in d["out_of_scope"] and not _allowed(m, _abs(m, f), "outputs")]
         if changed:  # light quality check for free: one changed file, capped
             pick = changed[len(changed) // 2]  # ponytail: middle file, not random; the first is often trivial
             v["sample"] = {"file": pick, "diff": agy_diff(job, files=[pick], max_chars=1500)["diff"]}
@@ -565,11 +575,28 @@ def _abs(m, p):
     return p if os.path.isabs(p) else os.path.join(m.get("top") or m["cwd"], p)
 
 
+def _report(m, text):
+    """agy's `response` joins every text message of the round, progress included ('Rendering X (14%)...':
+    3.5k tokens before the result in the Ep 3 session). The report the guard asks for is the last block
+    that opens with '1. done|skipped|failed'; without one, the end is where agy stopped. Paths relative.
+    The raw text stays in the job's r*.jsonl."""
+    starts = [x.start() for x in re.finditer(r"(?m)^[ \t]*1\.\s+(done|skipped|failed)\b", text)]
+    if starts:
+        text = text[starts[-1]:]
+    elif len(text) > 1500:
+        text = "…" + text[-1500:]
+    text = text.replace((m.get("top") or m["cwd"]).rstrip("/") + "/", "")
+    text = re.sub(r"\[([^\]]+)\]\(file://[^)]*\)", r"\1", text)  # agy's markdown file links
+    # the Files line repeats what the verdict's stat and scope lists say
+    text = re.sub(r"(?m)^(Files:.{300}).+$", r"\1 …(see stat)", text)
+    return text.strip()
+
+
 @mcp.tool()
 def agy_status(job: str | None = None, steps: int = 5, full_report: bool = False) -> dict:
     """One job's progress, compact: state (running|stalled|done|failed|cancelled), elapsed,
     step/edit counts, the last `steps` tool steps as short lines, files edited (relative),
-    commands run, denied actions, agy's report (first 1500 chars unless full_report).
+    commands run, denied actions, agy's report (first 2500 chars unless full_report).
     With no job, lists recent jobs."""
     if job is None:
         ids = sorted((p.name for p in JOBS.iterdir() if p.is_dir()), reverse=True)[:15] \
@@ -591,9 +618,9 @@ def agy_status(job: str | None = None, steps: int = 5, full_report: bool = False
     if state in ("running", "stalled") and time.time() - r["started"] > m["timeout_s"]:
         agy_cancel(job)  # stream sessions have no --print-timeout, so the server enforces it
         state, err = "cancelled", f"timed out after {m['timeout_s']} s. " + err
-    report = (result or {}).get("response") or ""
-    if not full_report and len(report) > 1500:
-        report = report[:1500] + " …[truncated: agy_status(full_report=True)]"
+    report = _report(m, (result or {}).get("response") or "")
+    if not full_report and len(report) > 2500:
+        report = report[:2500] + " …[truncated: agy_status(full_report=True)]"
     done_steps = [x for x in st if x["state"] != "ACTIVE"]
     took = (result or {}).get("duration_seconds")  # cumulative over rounds; wall clock while running
     out = {"job": job, "state": state, "round": n,
@@ -657,7 +684,7 @@ def agy_diff(job: str, files: list[str] | None = None, max_chars: int = 6000) ->
     paths = ["--", *[os.path.relpath(_abs(m, f), top) for f in files]] if files else []
     diff = _git(top, "diff", m["base"], now, *paths).decode(errors="replace")
     return {"changed": [_rel(m, f) for f in changed],
-            "out_of_scope": [_rel(m, f) for f in changed if not _allowed(m, f)],
+            "out_of_scope": [_rel(m, f) for f in changed if not (_allowed(m, f) or _allowed(m, f, "outputs"))],
             "not_from_agy_edits": [_rel(m, f) for f in changed if f not in edits],
             "commands": [c[:120] for c in commands], "denied": denied,
             "stat": _git(top, "diff", "--stat", m["base"], now).decode(),
@@ -748,21 +775,25 @@ def agy_permissions(add: list[str] | None = None, remove: list[str] | None = Non
     Rules are word prefixes, no globs: `command(git diff)`, `read_url(https://archive.org/)`, or
     `command(regex:npm run (build|lint))`. Keep them narrow: a command not on the list ends agy's
     round. `check`: command lines to test against the list after any add/remove — run it on every
-    command a brief names before agy_start."""
+    command a brief names before agy_start. With add/remove/check the reply is compact (what changed,
+    the rule count); call with no arguments to read the whole list."""
     d = json.loads(SETTINGS.read_text()) if SETTINGS.exists() else {}
     allow = d.setdefault("permissions", {}).setdefault("allow", [])
-    for r in add or []:
-        if r not in allow:
-            allow.append(r)
-    for r in remove or []:
-        if r in allow:
-            allow.remove(r)
+    added = [r for r in dict.fromkeys(add or []) if r not in allow]
+    allow.extend(added)
+    removed = [r for r in dict.fromkeys(remove or []) if r in allow]
+    for r in removed:
+        allow.remove(r)
     if add or remove:
         SETTINGS.parent.mkdir(parents=True, exist_ok=True)
         SETTINGS.write_text(json.dumps(d, indent=2) + "\n")
-    out = {"allow": allow, "settings": str(SETTINGS)}
+    if not (add or remove or check):
+        return {"allow": allow, "settings": str(SETTINGS)}
+    # the Ep 3 session printed the whole 47-rule list ~20 times (~35k Claude tokens): only the change
+    out = {"added": added, "removed": removed, "rules": len(allow)}
     if check:
-        out["check"] = _check_rules(check, allow)
+        out["check"] = [c if c["missing"] else {"command": c["command"][:80], "allowed": True}
+                        for c in _check_rules(check, allow)]
     return out
 
 
@@ -816,6 +847,14 @@ def selftest():
         assert dd["out_of_scope"] == ["keep.txt", "new.py"], dd
         assert dd["not_from_agy_edits"] == ["keep.txt"], dd
         assert "new.py" not in agy_diff("t", files=["a.py"])["diff"]  # file-scoped diff
+        m["outputs"] = [str(repo / "keep.txt")]; _save(m)  # declared output: not out of scope
+        assert agy_diff("t")["out_of_scope"] == ["new.py"]
+        assert "never edit them" in _guard(m, "b") and str(repo / "keep.txt") in _guard(m, "b")
+        m.pop("outputs"); _save(m)
+        rep = "Rendering X (10%)...\n1. done — plan\n" + "Rendering X (90%)...\n" * 50 + \
+              f"1. done — check: pass — ok\nFiles: {repo}/a.py"
+        assert _report(m, rep) == "1. done — check: pass — ok\nFiles: a.py", _report(m, rep)
+        assert _report(m, "x" * 2000).startswith("…") and len(_report(m, "x" * 2000)) == 1501
         r = agy_discard("t")
         assert (repo / "a.py").read_text() == "old\n" and not (repo / "new.py").exists(), r
         assert (repo / "keep.txt").read_text() == "other session edit\n"  # untouched
@@ -917,6 +956,11 @@ def selftest():
         _release_mcp(jb)
         assert "loc" not in json.loads(AGY_MCP.read_text())["mcpServers"]
         assert "mcp(loc/*)" not in json.loads(SETTINGS.read_text())["permissions"]["allow"]
+        p = agy_permissions(add=["command(ls )", "command(ls )"], check=["ls -l", "rm x"])
+        assert p["added"] == ["command(ls )"] and "allow" not in p, p
+        assert p["check"][0] == {"command": "ls -l", "allowed": True} and p["check"][1]["missing"] == ["rm x"], p
+        assert agy_permissions(remove=["command(ls )"])["removed"] == ["command(ls )"]
+        assert "allow" in agy_permissions()
     finally:
         CLAUDE_JSON, AGY_MCP, SETTINGS = saved
     # setup on a fake home: dry run touches nothing; --apply archives, empties, keeps rules; restore.sh undoes it
