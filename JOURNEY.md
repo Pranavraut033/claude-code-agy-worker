@@ -178,7 +178,7 @@ Since v0.4.0 agy runs **bare** and the calling Claude session lends each job exa
 that job only and removes it afterwards. `/agy-worker:agy-setup` does the clean-up for anyone, with a dry run and
 a restore script. We tried running agy from an empty temp folder to dodge a repo's own agy files: it doesn't
 work — with `--add-dir` agy still loads the repo's `GEMINI.md` and rules, and without it agy cannot touch the
-repo. So `agy_start` now reports a repo's agy files instead (`repo_agy_config`).
+repo. So `agy_start` now reports a repo's agy files instead (`repo_agy_config`). The clean rerun is [benchmark 4](benchmarks/04-bare/PLAN.md): the same two tasks plus one Claude can't script — 30 varied tickets to classify and summarise — run both ways.
 
 ## 7. Where the savings might really be
 

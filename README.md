@@ -110,7 +110,7 @@ Small tasks, measured 2026-10-19: Claude alone vs Claude orchestrating agy (`gem
 | Large package: 40-file API migration + type hints | 91k → 107k (+17 %) | 38 s → 1,050 s | 6/6 both |
 | v0.3.0 verdict loop, CSV task | 96k → **80k (−17 %)** | 19 s → 213 s | 6/6 |
 
-**Caveat:** all three benchmarks ran with agy's own MCP servers, skills and plugins loaded into every job, which doubled agy's per-turn overhead and caused stray MCP calls (benchmark 3's large run failed on one). v0.4.0 runs agy bare. Rerun pending.
+**Caveat:** all three benchmarks ran with agy's own MCP servers, skills and plugins loaded into every job, which doubled agy's per-turn overhead and caused stray MCP calls (benchmark 3's large run failed on one). v0.4.0 runs agy bare. The clean rerun, which adds a task Claude can't script (per-file judgment), is [benchmark 4](benchmarks/04-bare/PLAN.md).
 
 So far agy **costs** Claude tokens: orchestration (brief, permissions, wait, audit) has a fixed cost of ~100k, and Claude alone is very cheap at anything it can script — in the large benchmark it wrote one regex script and finished in 7 tool calls. The skill therefore keeps small work in Claude ("too small for agy"). Untested so far: work Claude can't script, and reading-heavy research. Plans, fixtures, checks and raw numbers: [`benchmarks/`](benchmarks/); the full story, including 22 jobs of real project use: [JOURNEY.md](JOURNEY.md).
 
