@@ -126,6 +126,18 @@ The rows above ran with agy's own MCP servers, skills and plugins loaded into ev
 
 agy **still costs** Claude tokens, even on the judgment task: orchestration (brief, wait, verdict, audit) has a fixed cost of ~95–100k, and Claude alone is cheap at anything that fits in one read — it triaged all 30 tickets in 3 tool calls. The skill therefore keeps small work in Claude ("too small for agy"). Where agy can still pay: packages long enough that Claude would otherwise spend many turns waiting (renders, build chains), and keeping your Claude session limit free while Gemini does the hours of work. Untested: reading-heavy research, and tasks far larger than one context. Plans, fixtures, checks and raw numbers: [`benchmarks/`](benchmarks/); the full story, including 22 jobs of real project use: [JOURNEY.md](JOURNEY.md).
 
+## 🧭 Status and next steps
+
+**Paused at v0.5.1.** Five benchmarks: no Claude-token saving, equal quality, much slower. It stays opt-in and useful for:
+
+- 🔋 **Claude limit nearly spent**: Gemini quota is a separate pool.
+- ⏳ **Long unattended runs**: renders, build chains, long test suites; Claude reads one verdict at the end.
+- 🔎 **Research legwork**: many pages searched, downloaded or transcribed; Claude reads the summary and spot-checks.
+- 📦 **Volume beyond one Claude read**: hundreds of files or records with a machine verifier.
+- 📐 **Spec-to-file builds**: applying a detailed, already-decided spec to a large file.
+
+Worth trying next: a lean headless orchestrator (`claude -p --bare` or the Agent SDK) to cut the ~85–95k fixed start per job, a Haiku babysitter, batching packages, a sandbox for commands that run repo code, and benchmarks at a volume Claude can't read in one go. Details: [JOURNEY.md §9](JOURNEY.md#9-where-it-stands-and-what-could-come-next).
+
 ## 📚 More
 
 <details><summary><b>Manual install</b></summary>

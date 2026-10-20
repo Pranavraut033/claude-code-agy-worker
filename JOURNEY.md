@@ -256,7 +256,34 @@ guard, and says plainly in the README that granting a test runner is granting co
 - **Write down what surprised you** — [`skills/agy/references/models.md`](skills/agy/references/models.md)
   is a growing per-model log of timings and quirks.
 
-## 9. Help wanted
+## 9. Where it stands, and what could come next
+
+Paused at v0.5.1 (2026-10-20). Five benchmarks gave the same answer: at equal quality, routing work through agy
+costs Claude 0.99–1.21× the tokens of doing it directly, and takes 10–35× longer. agy-worker is therefore opt-in.
+
+**Where it is still useful**
+- **Claude's usage limit is nearly spent.** Gemini quota is a separate pool; work keeps moving.
+- **Long unattended runs:** renders, build and install chains, long test suites. Claude starts the job and reads
+  one verdict instead of checking in every few minutes (a 37-min render package ran clean in two orchestrator turns).
+- **Research legwork:** searching, downloading and transcribing many pages, where Claude reads a summary. Spot-check
+  it: agy's first research report had two load-bearing errors.
+- **Volume beyond one Claude read:** hundreds of files or records with a machine verifier (28 JSON records +
+  verifier ran clean in real use).
+- **Spec-to-file builds:** applying a detailed, decided spec to a large file (a 700-line scene in 11 min).
+
+**Improvements worth trying**
+1. **A lean headless orchestrator** (`claude -p --bare --tools … --strict-mcp-config`, or the Agent SDK with only
+   the agy tools). Each benchmark orchestrator paid an ~85–95k fixed start; this is the one lever that attacks it.
+2. **A cheap model to babysit** (Haiku for start, wait and verdict), with the strong model only writing the brief.
+3. **Batching:** several packages per brief, so the fixed cost is paid once.
+4. **A sandbox for commands that run repo code.** A granted test runner executes whatever agy writes (benchmark 5);
+   `unattributed` detects it after the fact, a container or a read-only copy for checks would prevent it.
+5. **Smaller fixes:** count agy's subagent tokens in the verdict; close idle live sessions automatically; make the
+   desktop app's first connection reliable (it caches one failed connect for 15 min, often right after an update).
+6. **Benchmarks not yet run:** judgment at a scale that does not fit one read (hundreds of inputs), reading-heavy
+   research, and n > 1 for any of it.
+
+## 10. Help wanted
 
 If you have run a Claude-orchestrates-a-cheaper-agent setup and found it **does** save tokens,
 we would love to know what was different: task type, orchestrator setup, model, numbers. Issues
