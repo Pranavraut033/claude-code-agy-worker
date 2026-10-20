@@ -1,0 +1,3 @@
+run	claude_tokens	cumul_input	tool_uses	wall_s	agy_tokens	agy_wall_s	rounds	checks	job
+small-t2	80367	887452	14	213.1	192170	163	0	6/6	1020-111521-5548
+large	77818	804506	10	310.0	316364	266	1 (ended failed)	2/6 (unmigrated)	1020-111516-02aa

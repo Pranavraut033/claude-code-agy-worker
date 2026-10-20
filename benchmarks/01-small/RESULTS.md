@@ -1,5 +1,8 @@
 # Benchmark: Claude alone vs Claude orchestrating agy
 
+> **Note (2026-10-20):** this run had agy's own global config loaded into every job (7 MCP servers, 7 skills, 22 plugins, agents, rules), which roughly doubled agy's fixed cost per turn (16k vs 7k tokens bare) and can cause stray, denied MCP calls. Claude-side numbers are unaffected by it; agy-side numbers are an upper bound. See `../03-lean/RESULTS.md`.
+
+
 Run on 2026-10-19. There are 6 runs (3 tasks × 2 arms) with n=1 per cell. Every run is recorded as it came out, with no reruns.
 
 ## Method

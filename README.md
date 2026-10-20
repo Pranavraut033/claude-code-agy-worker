@@ -6,7 +6,7 @@
 
 A Claude Code plugin that hands long, multi-task work packages to the Antigravity CLI (`agy`) and audits every change it makes.
 
-![version](https://img.shields.io/badge/version-0.3.0-blue) [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE) ![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-D97757?logo=anthropic&logoColor=white) ![Antigravity CLI](https://img.shields.io/badge/Antigravity_CLI-1.4.2-4285F4?logo=google&logoColor=white) ![MCP](https://img.shields.io/badge/MCP-server-8A2BE2) ![python](https://img.shields.io/badge/python-3.10%2B_·_uv-3776AB?logo=python&logoColor=white) ![platform](https://img.shields.io/badge/tested_on-macOS-lightgrey?logo=apple)
+![version](https://img.shields.io/badge/version-0.4.0-blue) [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE) ![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-D97757?logo=anthropic&logoColor=white) ![Antigravity CLI](https://img.shields.io/badge/Antigravity_CLI-1.4.2-4285F4?logo=google&logoColor=white) ![MCP](https://img.shields.io/badge/MCP-server-8A2BE2) ![python](https://img.shields.io/badge/python-3.10%2B_·_uv-3776AB?logo=python&logoColor=white) ![platform](https://img.shields.io/badge/tested_on-macOS-lightgrey?logo=apple)
 
 **📖 New here? Read [the journey](JOURNEY.md)** — why we built this, what broke, and what the benchmarks really showed.
 
@@ -52,6 +52,8 @@ In Claude Code, run:
 
 Restart Claude Code; `/mcp` should list agy-worker.
 
+**First time:** run `/agy-worker:agy-setup`. It makes agy bare: agy's own MCP servers, skills, plugins and agents move to `~/Documents/agy-config-archive-<date>/` (with `restore.sh`), your rules stay, and the read-only allow-list baseline is added. It shows a dry run and asks first. From then on, the calling Claude session lends each job exactly the skills (`lend=[…]`, ponytail by default) and MCP servers (`mcp=[…]`) it needs.
+
 Then just ask:
 
 > hand this to agy: add type hints to every function in src/ and make mypy pass
@@ -68,7 +70,7 @@ A header panel, one line per step with an icon (📄 read · ✎ edit · ▶ com
 
 | Tool | Description |
 |---|---|
-| `agy_start` | Start agy on a work package in place in cwd; `checks=[…]` run by the waiter when it finishes. |
+| `agy_start` | Start agy on a work package in place in cwd; `checks=[…]` run by the waiter; `lend=[…]` skills and `mcp=[…]` servers borrowed from Claude for this job. |
 | `agy_status` | One job's progress: compact state, steps, edits, commands, denied actions, report. |
 | `agy_wait` | Block until job finishes or stalls; returns agy_status. |
 | `agy_diff` | Audit changed files against snapshot, out-of-scope edits, denied actions, diff. |
@@ -106,6 +108,9 @@ Small tasks, measured 2026-10-19: Claude alone vs Claude orchestrating agy (`gem
 | Fix 3 planted bugs | 86k → 103k | 14 s → 211 s | 5/5 both |
 | **Total** | **264k → 319k (+21 %)** | **40 s → 536 s** | **15/15 both** |
 | Large package: 40-file API migration + type hints | 91k → 107k (+17 %) | 38 s → 1,050 s | 6/6 both |
+| v0.3.0 verdict loop, CSV task | 96k → **80k (−17 %)** | 19 s → 213 s | 6/6 |
+
+**Caveat:** all three benchmarks ran with agy's own MCP servers, skills and plugins loaded into every job, which doubled agy's per-turn overhead and caused stray MCP calls (benchmark 3's large run failed on one). v0.4.0 runs agy bare. Rerun pending.
 
 So far agy **costs** Claude tokens: orchestration (brief, permissions, wait, audit) has a fixed cost of ~100k, and Claude alone is very cheap at anything it can script — in the large benchmark it wrote one regex script and finished in 7 tool calls. The skill therefore keeps small work in Claude ("too small for agy"). Untested so far: work Claude can't script, and reading-heavy research. Plans, fixtures, checks and raw numbers: [`benchmarks/`](benchmarks/); the full story, including 22 jobs of real project use: [JOURNEY.md](JOURNEY.md).
 

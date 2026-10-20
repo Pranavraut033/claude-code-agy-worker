@@ -57,7 +57,8 @@ Before any brief, lay out the whole job (in the plan, not in agy's head):
 
 ## 2. Write the package brief
 
-`agy_start(brief, cwd, allowed_files, model?, timeout_s=3600, network=False)`. The server
+`agy_start(brief, cwd, allowed_files, model?, timeout_s=3600, network=False, checks=[…],
+lend=[…], mcp=[…])`. The server
 wraps the brief in a guard preamble (only allowed files, no git state changes, no
 installs/deletes, network only if `network=True`, skip-and-report ambiguity, final report) —
 don't repeat those. Structure the brief (one delimiter style: Markdown headings):
@@ -73,6 +74,17 @@ don't repeat those. Structure the brief (one delimiter style: Markdown headings)
 # Report         per task: done / skipped (why) / check result; files changed
 ```
 
+- **agy runs bare; you lend it what the job needs.** agy has no skills or MCP servers of its own
+  (run `/agy-worker:agy-setup` once if `agy mcp list` shows any). `lend` inlines skills or
+  instruction files into the brief: Claude skill names (`three-render`), `plugin:skill`, or a path to
+  a `.md`/skill folder; default `["ponytail"]`, `lend=[]` for none (research jobs). Each lent skill
+  costs its full text once per job, so lend only what this package uses. `mcp` lends Claude's MCP
+  servers for this job only: `"server"` for all its tools, `"server/tool"` for one; they are removed
+  again at `agy_close`/`agy_cancel`. Lend read-only servers; a lent server's tools run without asking.
+  Repo context (the parts of CLAUDE.md a package needs) goes into the brief or `lend` — agy is
+  repo-agnostic.
+- **If `agy_start` returns `repo_agy_config`**, the repo has its own agy files (`GEMINI.md`, `.agents/…`)
+  that agy loads into every job there; the job is not bare. Tell the user once; moving them is their call.
 - **Make checks machine-readable, and hand them to the server.** Each task's check prints
   pass/fail (tests, a verifier, a lint, a tiny compare script). Pass the final ones as
   `agy_start(..., checks=["python3 -m unittest discover -s tests", …])`: the waiter runs them

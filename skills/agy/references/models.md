@@ -27,6 +27,11 @@ section here and a row to the timing table. Append to the changelog at the botto
   `write_file` with a `Path` parameter; 1.4.2 used `view_file` / `write_to_file` / `replace_file_content`
   with `TargetFile` / `AbsolutePath`. agy-worker treats any write/edit/replace tool as an edit
   (v0.3.0); before that, edits went invisible and every change looked "not from agy".
+- **agy's own config pollutes every job.** It loads every MCP server, skill, plugin, agent and rule in
+  `~/.gemini/config` (shared with the app/IDE) and the workspace's `GEMINI.md`/`AGENTS.md`/`.agents/`. Trivial
+  turn: 16,113 tokens loaded vs 7,169 bare (flash-low, 2026-10-20). It also calls those MCP tools, which headless
+  mode denies (`mcp(server/tool)` rules). `--add-dir` does not isolate a repo's agy files; outside the
+  workspace, file reads are denied. → run bare (`agy-setup`) and lend per job.
 - **Live sessions (agy-worker ≥ 0.2.0):** `--input-format stream-json --output-format stream-json`,
   one stdin line per message: `{"event": "user", "message": {"content": "…"}}` (a missing
   `event` field kills the session). Measured 2026-10-20 (flash-low): first turn 9 s incl. ~4 s
@@ -155,3 +160,4 @@ Don't spend it on packages Flash can do — the weekly quota is limited.
 - 2026-10-20: 12 rows from three real project sessions (22 jobs). Patterns: denials ended 8 of 22 jobs, almost all improvised variants of allowed commands (`python3 -c`, pipes, an extra flag); agy cannot judge visual output; one 56-min thrash on a single defect. → v0.1.5 guard (exact commands, no pipes, foreground only, 2 attempts per defect, never "verified" for visuals), `agy_permissions(check=…)`, denied command named in status, per-job quota drop.
 - 2026-10-20: live sessions (agy-worker 0.2.0): stream-json input, follow-ups without cold start, a denial ends only the turn, restart-on-conversation applies new rules; 4 timing rows.
 - 2026-10-20: agy 1.4.3 renamed its file tools (write_file/Path); edit detection made name-tolerant. v0.3.0 server-run checks: one verdict per round (live test: flash-low, 17 s, checks caught the deliberately failing one).
+- 2026-10-20: bare agy (7.2k vs 16.1k tokens per trivial turn); v0.4.0 per-job lend/mcp, agy-setup, verdict checks on every finished round; agy 1.4.3 also uses `edit_file`.

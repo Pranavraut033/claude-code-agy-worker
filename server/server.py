@@ -23,6 +23,9 @@ from pathlib import Path
 JOBS = Path(os.environ.get("AGY_WORKER_HOME") or Path.home() / ".local/state/agy-worker") / "jobs"
 AGY = shutil.which("agy") or str(Path.home() / ".local/bin/agy")
 SETTINGS = Path.home() / ".gemini/antigravity-cli/settings.json"
+AGY_MCP = Path.home() / ".gemini/config/mcp_config.json"  # agy's global MCP list (CLI, app and IDE share it)
+CLAUDE_JSON = Path.home() / ".claude.json"
+DEFAULT_LEND = ("ponytail",)  # skills every job borrows unless the caller passes lend=[]
 DEFAULT_MODEL = "gemini-3.8-flash-medium"
 WRITE_TOOLS = {"replace_file_content", "multi_replace_file_content", "write_to_file", "sed_file",
                "notebook_edit"}
@@ -47,6 +50,8 @@ moving on. Follow these rules exactly:
   no `python3 -c`, no sed/awk, no sleep, no extra flags. Read and search files with your file
   tools, not the shell. A command that is not on the allow-list ends your WHOLE run and throws
   away the report, even when all the work is done.
+- Never call an MCP tool unless the LENT section below lends you that server; any other MCP call
+  is denied and ends your run.
 - Run every command in the foreground and wait for it to finish; never leave background tasks.
 - Do not read outside the repository (library sources, virtualenvs, caches) unless asked to.
 - At most 2 attempts per defect: if a fix does not hold after 2 tries, stop, mark it failed with
@@ -60,7 +65,7 @@ moving on. Follow these rules exactly:
   If the brief names a report file for longer findings, write them there, opening with a
   summary of at most 10 lines; do not repeat them in the final message.
 
-PACKAGE
+{lent}PACKAGE
 {brief}
 """
 
@@ -69,7 +74,120 @@ def _guard(m, brief):
     net = ("Web search and downloads are allowed for this task; on HTTP 401/403/429, a CAPTCHA "
            "or a bot challenge, stop that source at once: never bypass, spoof or retry in a loop."
            if m.get("network") else "No network access.")
-    return GUARD.format(files=", ".join(m["allowed"]), network=net, brief=brief)
+    lent = "".join(f"### {label}\n{text.strip()}\n\n" for label, text in m.get("lent_text", []))
+    if m.get("borrowed_mcp"):
+        lent += "### MCP servers you may use\n" + ", ".join(m["borrowed_mcp"]) + "\n\n"
+    lent = f"LENT BY THE ORCHESTRATOR — follow these for this package\n\n{lent}" if lent else ""
+    return GUARD.format(files=", ".join(m["allowed"]), network=net, brief=brief, lent=lent)
+
+
+def _skill(item, top):
+    """A skill or instruction file the caller lends: a path (file, or a folder with SKILL.md), or a
+    Claude skill name — looked up in the project's .claude/skills, ~/.claude/skills, then the plugin
+    cache (newest version; `plugin:skill` picks the plugin). Returns (label, text without frontmatter)."""
+    home = Path.home()
+    if "/" in item or item.endswith(".md"):
+        p = Path(os.path.expanduser(item))
+        p = p if p.is_absolute() else Path(top) / p
+        cands = [p / "SKILL.md" if p.is_dir() else p]
+    else:
+        plugin, _, name = item.rpartition(":")
+        cands = [] if plugin else [Path(top) / ".claude/skills" / name / "SKILL.md",
+                                   home / ".claude/skills" / name / "SKILL.md"]
+        cache = sorted((home / ".claude/plugins/cache").glob(f"*/{plugin or '*'}/*/skills/{name}/SKILL.md"),
+                       key=os.path.getmtime, reverse=True)
+        cands += cache
+    for c in cands:
+        if c.is_file():
+            text = c.read_text(errors="replace")
+            if text.startswith("---"):
+                text = text.split("---", 2)[-1]  # drop the frontmatter
+            return f"{'skill' if c.name == 'SKILL.md' else 'file'}: {item}", text
+    raise FileNotFoundError(f"lend: no skill or file '{item}' (looked in {', '.join(str(c) for c in cands[:3])})")
+
+
+def _claude_mcp(name, top):
+    """Claude's own config for an MCP server, converted to agy's mcp_config.json shape."""
+    srcs = []
+    if CLAUDE_JSON.exists():
+        d = json.loads(CLAUDE_JSON.read_text())
+        srcs += [d.get("mcpServers") or {}, ((d.get("projects") or {}).get(str(top)) or {}).get("mcpServers") or {}]
+    pj = Path(top) / ".mcp.json"
+    if pj.exists():
+        srcs.append(json.loads(pj.read_text()).get("mcpServers") or {})
+    for src in srcs:
+        e = src.get(name)
+        if e and e.get("command"):
+            return {k: e[k] for k in ("command", "args", "env") if e.get(k)}
+        if e and e.get("url"):
+            return {"serverUrl": e["url"], **({"headers": e["headers"]} if e.get("headers") else {})}
+    raise KeyError(f"mcp: Claude has no MCP server '{name}' (user config, project config or .mcp.json)")
+
+
+def _borrow_mcp(m, items):
+    """Lend Claude's MCP servers to this job: add them to agy's global list (agy reads it only at
+    startup) and allow `server/*` or one `server/tool`. Released by agy_close / agy_cancel; a job
+    whose process is gone is released at the next agy_start. ponytail: one JSON registry, no lock."""
+    reg_p = JOBS.parent / "borrowed.json"
+    reg = json.loads(reg_p.read_text()) if reg_p.exists() else {}
+    cfg = json.loads(AGY_MCP.read_text()) if AGY_MCP.exists() else {}
+    servers = cfg.setdefault("mcpServers", {})
+    rules = []
+    for it in items:
+        srv, _, tool = it.partition("/")
+        if srv not in servers:
+            servers[srv] = _claude_mcp(srv, m["top"] or m["cwd"])
+            reg.setdefault(srv, {"jobs": [], "ours": True})
+        reg.setdefault(srv, {"jobs": [], "ours": False})["jobs"].append(m["id"])
+        rules.append(f"mcp({srv}/{tool or '*'})")
+    AGY_MCP.parent.mkdir(parents=True, exist_ok=True)
+    AGY_MCP.write_text(json.dumps(cfg, indent=2) + "\n")
+    reg_p.parent.mkdir(parents=True, exist_ok=True)
+    reg_p.write_text(json.dumps(reg, indent=1))
+    agy_permissions(add=rules)
+    m["borrowed_mcp"], m["borrowed_rules"] = [i.partition("/")[0] for i in items], rules
+
+
+def _release_mcp(m):
+    if not m.get("borrowed_mcp"):
+        return
+    reg_p = JOBS.parent / "borrowed.json"
+    reg = json.loads(reg_p.read_text()) if reg_p.exists() else {}
+    cfg = json.loads(AGY_MCP.read_text()) if AGY_MCP.exists() else {"mcpServers": {}}
+    for srv in m["borrowed_mcp"]:
+        e = reg.get(srv)
+        if not e:
+            continue
+        e["jobs"] = [j for j in e["jobs"] if j != m["id"]]
+        if not e["jobs"]:
+            if e.get("ours"):
+                cfg.get("mcpServers", {}).pop(srv, None)
+            reg.pop(srv)
+    AGY_MCP.write_text(json.dumps(cfg, indent=2) + "\n")
+    reg_p.write_text(json.dumps(reg, indent=1))
+    still = {r for jid in {j for e in reg.values() for j in e["jobs"]} for r in _load(jid).get("borrowed_rules", [])}
+    agy_permissions(remove=[r for r in m["borrowed_rules"] if r not in still])
+    m["borrowed_mcp"] = []
+    _save(m)
+
+
+def _gc_borrowed():
+    reg_p = JOBS.parent / "borrowed.json"
+    if not reg_p.exists():
+        return
+    for jid in {j for e in json.loads(reg_p.read_text()).values() for j in e["jobs"]}:
+        try:
+            m = _load(jid)
+        except FileNotFoundError:
+            continue
+        if not _alive(m):
+            _release_mcp(m)
+
+
+def _repo_agy_config(top):
+    """agy loads a repo's own GEMINI.md / AGENTS.md / .agents config by itself, so such a job is not bare."""
+    return [n for n in ("GEMINI.md", "AGENTS.md", ".agents/rules", ".agents/skills", ".agents/agents",
+                        ".agents/plugins", ".agents/mcp_config.json") if (Path(top) / n).exists()]
 
 
 def _git(top, *args, env=None, inp=None):
@@ -274,7 +392,8 @@ mcp = MCPServer("agy-worker", instructions=(
 @mcp.tool()
 def agy_start(brief: str, cwd: str, allowed_files: list[str], model: str = DEFAULT_MODEL,
               timeout_s: int = 3600, network: bool = False, checks: list[str] | None = None,
-              check_timeout_s: int = 600) -> dict:
+              check_timeout_s: int = 600, lend: list[str] | None = None,
+              mcp: list[str] | None = None) -> dict:
     """Start agy on a work package (several related tasks), in place in `cwd` (absolute path). `brief` says the
     exact change, what done means, and which checks to run. `allowed_files` are the only
     paths agy may edit (absolute, or relative to cwd; a directory or a glob also works).
@@ -282,6 +401,10 @@ def agy_start(brief: str, cwd: str, allowed_files: list[str], model: str = DEFAU
     download (it must stop on 401/403/429/CAPTCHA). `checks` are shell commands (your own, run
     in `cwd` with your permissions, not agy's) the waiter runs when agy finishes: you then get
     one verdict with scope, stat and each check's result instead of spending turns on them.
+    agy runs bare: it gets no skills or MCP servers of its own. `lend` lends skills or instruction
+    files for this job (Claude skill names, `plugin:skill`, or paths; default ["ponytail"], pass []
+    for none); they are inlined into the brief. `mcp` lends Claude's MCP servers ("server" for all its
+    tools, "server/tool" for one), enabled for this job only and released by agy_close/agy_cancel.
     Returns {job, git, wait_cmd} immediately: run wait_cmd as a background shell task and read
     the verdict it prints."""
     cwd = os.path.realpath(os.path.expanduser(cwd))
@@ -296,6 +419,16 @@ def agy_start(brief: str, cwd: str, allowed_files: list[str], model: str = DEFAU
          "allowed": [os.path.realpath(a) for a in allowed], "model": model,
          "timeout_s": timeout_s, "brief": brief, "network": network, "rounds": [], "created": time.time(),
          "checks": checks or [], "check_timeout_s": check_timeout_s}
+    try:
+        m["lent_text"] = [_skill(i, m["top"] or cwd) for i in (DEFAULT_LEND if lend is None else lend)]
+    except FileNotFoundError as e:
+        return {"error": str(e)}
+    _gc_borrowed()
+    if mcp:
+        try:
+            _borrow_mcp(m, mcp)
+        except (KeyError, json.JSONDecodeError) as e:
+            return {"error": str(e)}
     pools = _usage_pools(model)
     m["quota_before"] = {f'{p["pool"]} · {p["window"]}': p["left_pct"] for p in pools}
     (JOBS / m["id"]).mkdir(parents=True)
@@ -303,6 +436,10 @@ def agy_start(brief: str, cwd: str, allowed_files: list[str], model: str = DEFAU
     out = {"job": m["id"], "git": bool(top), "wait_cmd": _wait_cmd(m["id"])}
     if not top:
         out["warning"] = "not a git repo: agy_diff and agy_discard cannot work for this job"
+    own = _repo_agy_config(top or cwd)
+    if own:
+        out["repo_agy_config"] = {"files": own, "note": "agy loads these by itself, so this job is not bare; "
+                                  "move them out of the repo and lend what a job needs instead"}
     low = [p for p in pools if p["left_pct"] < LOW_PCT]
     if low:
         out["quota_low"] = low
@@ -337,16 +474,19 @@ def _verdict(job):
     m = _load(job)
     st = agy_status(job)
     v = {k: st.get(k) for k in ("job", "state", "round", "elapsed_s", "tokens", "quota_drop_pct",
-                                "denied", "edits", "hint", "stderr") if st.get(k) not in (None, [], {})}
+                                "denied", "edits", "agy_error", "hint", "stderr") if st.get(k) not in (None, [], {})}
     v["report"] = (st.get("report") or "")[:1200] or None
     if m.get("top"):
         d = agy_diff(job, max_chars=0)
         v.update(out_of_scope=d["out_of_scope"], not_from_agy_edits=d["not_from_agy_edits"],
                  stat=d["stat"].strip().splitlines()[-1:] or ["no changes"])
-    checks = _run_checks(m) if st["state"] == "done" else []  # no point checking a failed round
+    # run the checks on every finished round: agy can finish its work and then get a 503 (status
+    # ERROR), and the checks, not agy's status, decide whether the work is good
+    checks = _run_checks(m) if st["state"] != "running" else []
     v["checks"] = checks
     v["all_checks_pass"] = all(c["ok"] for c in checks) if checks else None
-    v["clean"] = (st["state"] == "done" and not v.get("denied") and not v.get("out_of_scope")
+    finished = st["state"] == "done" or bool(st.get("agy_error") and st.get("report"))
+    v["clean"] = (finished and not st.get("denied_now") and not v.get("out_of_scope")
                   and v["all_checks_pass"] is not False)
     (JOBS / job / f"verdict-r{st['round']}.json").write_text(json.dumps(v))
     return v
@@ -444,7 +584,8 @@ def agy_status(job: str | None = None, steps: int = 5, full_report: bool = False
            "steps": [f'{x["tool"]} {x["state"].lower()} {_short(m, x["target"])}'
                      for x in done_steps[-steps:]],
            "edits": [_rel(m, e) for e in edits], "commands": [c[:120] for c in commands],
-           "denied": denied, "report": report or None,
+           "denied": denied, "denied_now": bool((result or {}).get("_denied_now")),
+           "agy_error": (result or {}).get("error"), "report": report or None,
            "tokens": (result or {}).get("_tokens"), "session": "open" if _live(m) else "closed"}
     vf = JOBS / job / f"verdict-r{n}.json"
     if vf.exists() and state != "running":
@@ -538,6 +679,7 @@ def agy_close(job: str) -> dict:
     files, diff and discard keep working; agy_resume can still reopen the conversation."""
     m = _load(job)
     _close(m)
+    _release_mcp(m)
     return {"job": job, "session": "closed"}
 
 
@@ -551,6 +693,7 @@ def agy_cancel(job: str) -> dict:
     PROCS.pop(job, None)
     m["cancelled"] = True
     _save(m)
+    _release_mcp(m)
     return {"job": job, "state": "cancelled"}
 
 
@@ -717,6 +860,64 @@ def selftest():
     assert _run_checks(mv)[0]["rc"] == "error"  # a vanished folder is reported, not raised
     mv["cwd"] = str(JOBS.parent); mv["checks"] = ["true"]; _save(mv)
     assert _verdict("t_v")["clean"] is True
+    # verdict: agy finished its report, then a 503 made the status ERROR -> checks still run and decide
+    (JOBS / "t_503").mkdir(parents=True)
+    m5 = {**mv, "id": "t_503", "cwd": str(JOBS.parent), "checks": ["true"]}
+    _save(m5)
+    (JOBS / "t_503/r1.jsonl").write_text(json.dumps({"event": "result", "result": {
+        "status": "ERROR", "error": "API error: UNAVAILABLE (code 503)", "response": "1. done — check: pass",
+        "usage": {"total_tokens": 5}}}) + "\n")
+    (JOBS / "t_503/s1.err").write_text("")
+    v = _verdict("t_503")
+    assert v["state"] == "failed" and v["checks"] and v["clean"] and "503" in v["agy_error"], v
+    # lending: a path, a missing name; a Claude MCP entry converted to agy's shape
+    sk = JOBS.parent / "SKILL.md"
+    sk.write_text("---\nname: x\n---\nDo the thing.\n")
+    assert _skill(str(sk), "/") == (f"skill: {sk}", "\nDo the thing.\n")
+    try:
+        _skill("no-such-skill-xyz", "/"); raise AssertionError("missing skill not caught")
+    except FileNotFoundError:
+        pass
+    global CLAUDE_JSON, AGY_MCP, SETTINGS
+    saved = CLAUDE_JSON, AGY_MCP, SETTINGS
+    CLAUDE_JSON, AGY_MCP, SETTINGS = JOBS.parent / "c.json", JOBS.parent / "mcp.json", JOBS.parent / "s.json"
+    try:
+        CLAUDE_JSON.write_text(json.dumps({"mcpServers": {
+            "loc": {"type": "stdio", "command": "srv", "args": ["--mcp"], "env": {}},
+            "web": {"type": "http", "url": "https://x.test/mcp", "headers": {"A": "b"}}}}))
+        assert _claude_mcp("loc", "/") == {"command": "srv", "args": ["--mcp"]}
+        assert _claude_mcp("web", "/") == {"serverUrl": "https://x.test/mcp", "headers": {"A": "b"}}
+        # borrow for two jobs, release one: server stays; release the other: server and rules go
+        ja, jb = {**m5, "id": "t_ba", "top": None}, {**m5, "id": "t_bb", "top": None}
+        for j in (ja, jb):
+            (JOBS / j["id"]).mkdir(parents=True)
+            _borrow_mcp(j, ["loc"]); _save(j)
+        assert "loc" in json.loads(AGY_MCP.read_text())["mcpServers"]
+        assert "mcp(loc/*)" in json.loads(SETTINGS.read_text())["permissions"]["allow"]
+        _release_mcp(ja)
+        assert "loc" in json.loads(AGY_MCP.read_text())["mcpServers"]  # jb still uses it
+        _release_mcp(jb)
+        assert "loc" not in json.loads(AGY_MCP.read_text())["mcpServers"]
+        assert "mcp(loc/*)" not in json.loads(SETTINGS.read_text())["permissions"]["allow"]
+    finally:
+        CLAUDE_JSON, AGY_MCP, SETTINGS = saved
+    # setup on a fake home: dry run touches nothing; --apply archives, empties, keeps rules; restore.sh undoes it
+    h = JOBS.parent / "home"
+    g = h / ".gemini/config"
+    (g / "skills/s1").mkdir(parents=True); (g / "skills/s1/SKILL.md").write_text("x")
+    (g / "rules").mkdir(); (g / "rules/core.md").write_text("rule")
+    (g / "mcp_config.json").write_text(json.dumps({"mcpServers": {"a": {"command": "a"}}}))
+    (g / "config.json").write_text(json.dumps({"plugins": {"p": {"enabled": True}}}))
+    r0 = setup_cli(home=h)
+    assert r0["dry_run"] and r0["mcp_servers"] == ["a"] and (g / "skills/s1").exists(), r0
+    r1 = setup_cli(apply=True, home=h)
+    arch = Path(r1["archive"])
+    assert not any((g / "skills").iterdir()) and (arch / ".gemini/config/skills/s1/SKILL.md").exists()
+    assert json.loads((g / "mcp_config.json").read_text()) == {"mcpServers": {}}
+    assert (g / "rules/core.md").exists() and not json.loads((g / "config.json").read_text())["plugins"]["p"]["enabled"]
+    assert "command(git diff)" in json.loads((h / ".gemini/antigravity-cli/settings.json").read_text())["permissions"]["allow"]
+    subprocess.run(["bash", str(arch / "restore.sh")], check=True, capture_output=True)
+    assert (g / "skills/s1/SKILL.md").exists() and "a" in json.loads((g / "mcp_config.json").read_text())["mcpServers"]
     shutil.rmtree(JOBS.parent)
     allow = ["command(grep )", "command(regex:npm run (build|lint))", "command(python3 b.py --only=g)"]
     c = {x["command"]: x["allowed"] for x in _check_rules(
@@ -740,6 +941,91 @@ def wait_cli(job, max_s=7200):
             return
         time.sleep(15)
     print(json.dumps(_verdict(job), indent=1))
+
+
+BASELINE = ["command(ls)", "command(cat )", "command(head )", "command(tail )", "command(wc )",
+            "command(grep )", "command(rg )", "command(git status)", "command(git diff)",
+            "command(git log)", "command(git show)"]  # read-only; models explore with these even when told not to
+
+RESTORE_SH = """#!/bin/bash
+# Put every archived item back where it came from (MANIFEST.tsv). Refuses to overwrite a non-empty folder.
+set -euo pipefail
+cd "$(dirname "$0")"
+tail -n +2 MANIFEST.tsv | while IFS=$'\\t' read -r archived original; do
+  if [ -f "$archived" ]; then cp "$archived" "$original"; echo "restored $original"; continue; fi
+  if [ -e "$original" ] && [ -n "$(ls -A "$original" 2>/dev/null)" ]; then echo "SKIP (exists, not empty): $original"; continue; fi
+  rmdir "$original" 2>/dev/null || true; mv "$archived" "$original"; echo "restored $original"
+done
+"""
+
+
+def setup_cli(apply=False, home=None, repo=None):
+    """`server.py setup [--apply] [repo]`: make agy bare for agy-worker. Archives agy's own MCP
+    servers, skills, plugins and agents (global, shared with the Antigravity app and IDE) to
+    ~/Documents/agy-config-archive-<date>/ with a manifest and restore.sh, keeps the user's rules,
+    adds the read-only baseline to the allow-list, and reports agy config a repo exposes. Dry run
+    unless --apply. Returns the report."""
+    home = Path(home or Path.home())
+    G, C = home / ".gemini/config", home / ".gemini/antigravity-cli"
+    tools = {t: shutil.which(t) or (str(home / ".local/bin" / t) if (home / ".local/bin" / t).exists() else None)
+             for t in ("agy", "uv", "git")}
+    full = lambda p: p.exists() and (p.is_file() or any(p.iterdir()))
+    folders = [p for p in (G / "skills", G / "plugins", G / "agents", C / "mcp", C / "plugin_data", C / "skills",
+                           C / "plugins", home / ".agents/skills", home / ".agents/agents") if full(p)]
+    mcp_cfg = json.loads((G / "mcp_config.json").read_text()) if (G / "mcp_config.json").exists() else {}
+    servers = list((mcp_cfg.get("mcpServers") or {}).keys())
+    cfg_p = G / "config.json"
+    plugins_on = [k for k, v in (json.loads(cfg_p.read_text()).get("plugins") or {}).items()
+                  if v.get("enabled")] if cfg_p.exists() else []
+    settings = home / ".gemini/antigravity-cli/settings.json"
+    allow = (json.loads(settings.read_text()).get("permissions") or {}).get("allow", []) if settings.exists() else []
+    missing = [r for r in BASELINE if r not in allow]
+    rep_ = {"dry_run": not apply, "tools": tools, "mcp_servers": servers, "plugins_enabled": plugins_on,
+            "folders": [str(p) for p in folders], "kept_rules": [str(p) for p in sorted((G / "rules").glob("*.md"))],
+            "baseline_rules_to_add": missing,
+            "repo_agy_config": _repo_agy_config(repo) if repo else None}
+    if not apply:
+        return rep_
+    stamp = time.strftime("%Y-%m-%d")
+    arch = home / "Documents" / f"agy-config-archive-{stamp}"
+    n = 1
+    while arch.exists():
+        n += 1
+        arch = home / "Documents" / f"agy-config-archive-{stamp}-{n}"
+    arch.mkdir(parents=True)
+    rows = []
+    def keep(src):
+        dst = arch / src.relative_to(home)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        return dst
+    for f in (G / "mcp_config.json", cfg_p):
+        if f.exists():
+            shutil.copy2(f, keep(f)); rows.append((keep(f), f))
+    if servers:
+        (G / "mcp_config.json").write_text('{\n  "mcpServers": {}\n}\n')
+    if plugins_on:
+        d = json.loads(cfg_p.read_text())
+        for v in d["plugins"].values():
+            v["enabled"] = False
+        cfg_p.write_text(json.dumps(d, indent=2))
+    for p in folders:
+        dst = keep(p)
+        shutil.move(str(p), str(dst)); rows.append((dst, p))
+        p.mkdir(exist_ok=True)  # agy expects the folder; leave it empty
+    (arch / "MANIFEST.tsv").write_text("archived\toriginal\n" + "".join(f"{a}\t{o}\n" for a, o in rows))
+    (arch / "restore.sh").write_text(RESTORE_SH)
+    (arch / "restore.sh").chmod(0o755)
+    (arch / "README.md").write_text(
+        "# agy config archive\n\nMoved here by `agy-worker setup` so agy runs bare: the orchestrating Claude "
+        "session lends skills and MCP servers per job. These folders are shared with the Antigravity app and "
+        "IDE. Rules were kept. Restore everything with `bash restore.sh`.\n")
+    if missing:
+        d = json.loads(settings.read_text()) if settings.exists() else {}
+        d.setdefault("permissions", {}).setdefault("allow", []).extend(missing)
+        settings.parent.mkdir(parents=True, exist_ok=True)
+        settings.write_text(json.dumps(d, indent=2) + "\n")
+    rep_.update(dry_run=False, archive=str(arch))
+    return rep_
 
 
 def watch_cli(job=None):
@@ -815,6 +1101,10 @@ if __name__ == "__main__":
             watch_cli(sys.argv[2] if len(sys.argv) > 2 else None)
         except KeyboardInterrupt:
             pass
+    elif sys.argv[1:2] == ["setup"]:
+        args = sys.argv[2:]
+        print(json.dumps(setup_cli(apply="--apply" in args,
+                                   repo=next((a for a in args if not a.startswith("--")), None)), indent=1))
     elif sys.argv[1:2] == ["wait"]:
         wait_cli(sys.argv[2], int(sys.argv[3]) if len(sys.argv) > 3 else 7200)
     else:

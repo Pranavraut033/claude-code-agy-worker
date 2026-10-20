@@ -165,6 +165,21 @@ job's quota drop. The skill adds a pre-flight step (run the generators and check
 before briefing) and says plainly: the orchestrator judges every visual, and takes over a defect
 agy has failed twice.
 
+## 6b. The pollution we didn't see
+
+agy has its own configuration — and ours was full: 7 MCP servers, 7 skills, 22 plugins (more skills and
+MCPs), 3 agents and 3 rule files, plus this repo's `GEMINI.md`, a symlink to the whole `CLAUDE.md`. agy loads
+all of it into every job. A trivial one-turn reply cost **16,113** agy tokens; with everything archived it costs
+**7,169**. Worse, agy tried to *use* those tools: in benchmark 3 it called a `codegraph` MCP tool, headless mode
+denied it, and the round ended. All three benchmarks ran polluted (their agy numbers are an upper bound).
+
+Since v0.4.0 agy runs **bare** and the calling Claude session lends each job exactly what it needs:
+`agy_start(lend=[…])` inlines skills (ponytail by default), `mcp=[…]` enables one of Claude's MCP servers for
+that job only and removes it afterwards. `/agy-worker:agy-setup` does the clean-up for anyone, with a dry run and
+a restore script. We tried running agy from an empty temp folder to dodge a repo's own agy files: it doesn't
+work — with `--add-dir` agy still loads the repo's `GEMINI.md` and rules, and without it agy cannot touch the
+repo. So `agy_start` now reports a repo's agy files instead (`repo_agy_config`).
+
 ## 7. Where the savings might really be
 
 We asked agy to research cheaper orchestration (report: [`docs/research/cheaper-orchestration.md`](docs/research/cheaper-orchestration.md)).
