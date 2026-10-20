@@ -6,7 +6,7 @@
 
 A Claude Code plugin that hands long, multi-task work packages to the Antigravity CLI (`agy`) and audits every change it makes.
 
-![version](https://img.shields.io/badge/version-0.5.1-blue) [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE) ![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-D97757?logo=anthropic&logoColor=white) ![Antigravity CLI](https://img.shields.io/badge/Antigravity_CLI-1.4.3-4285F4?logo=google&logoColor=white) ![MCP](https://img.shields.io/badge/MCP-server-8A2BE2) ![python](https://img.shields.io/badge/python-3.10%2B_·_uv-3776AB?logo=python&logoColor=white) ![platform](https://img.shields.io/badge/tested_on-macOS-lightgrey?logo=apple)
+![version](https://img.shields.io/badge/version-0.5.2-blue) [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE) ![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-D97757?logo=anthropic&logoColor=white) ![Antigravity CLI](https://img.shields.io/badge/Antigravity_CLI-1.4.3-4285F4?logo=google&logoColor=white) ![MCP](https://img.shields.io/badge/MCP-server-8A2BE2) ![python](https://img.shields.io/badge/python-3.10%2B_·_uv-3776AB?logo=python&logoColor=white) ![platform](https://img.shields.io/badge/tested_on-macOS-lightgrey?logo=apple)
 
 **📖 New here? Read [the journey](JOURNEY.md)** — why we built this, what broke, and what the benchmarks really showed.
 
@@ -58,9 +58,17 @@ Restart Claude Code; `/mcp` should list agy-worker.
 
 **First time:** run `/agy-worker:agy-setup`. It makes agy bare: agy's own MCP servers, skills, plugins and agents move to `~/Documents/agy-config-archive-<date>/` (with `restore.sh`), your rules stay, and the read-only allow-list baseline is added. It shows a dry run and asks first. From then on, the calling Claude session lends each job exactly the skills (`lend=[…]`, ponytail by default) and MCP servers (`mcp=[…]`) it needs.
 
-Then just ask:
+Then, at the start of a session or in the middle of one:
+
+```text
+/agy-worker:agy [task]
+```
+
+From then on Claude decides per job whether to hand it to agy, says in one line why or why not, and runs agy jobs in hand-off mode with checks: you watch the run and review the diff, and Claude reads the verdict. Or just ask:
 
 > hand this to agy: add type hints to every function in src/ and make mypy pass
+
+**Track the usage:** `/agy-worker:agy --usage [folder]` does the same and keeps `AGY-LOG.md` (in the repo root unless you name a folder). The log has one row per job (agy's tokens, time, rounds and verdict, plus Claude's tool calls), your Claude usage % before and after, and one line per problem met. Share it in an issue if you'd like to help measure where agy saves Claude usage.
 
 **Watch a job live** in any terminal (newest job if you leave out the id):
 

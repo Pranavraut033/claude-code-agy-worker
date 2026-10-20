@@ -5,11 +5,44 @@ description: Run the Antigravity CLI (agy) as an agentic worker through the agy-
 
 # /agy — Claude briefs, agy works, the user watches, Claude checks the verdict
 
-**When to use agy at all.** Four benchmarks (README) found no Claude-token saving: briefing,
-waiting and auditing cost about as much Claude reading as doing the work, and agy is 10–35×
-slower. Gemini quota is the cheap part. So agy is **opt-in**: use it when the user asks, when
-Claude's usage limit is nearly spent (Gemini is a separate pool), for long unattended runs, or
-for volume too large for one Claude read. Otherwise do the work yourself and say so in one line.
+## Invocation
+
+- **`/agy [task]`** — from here on, for every job in this session decide whether to hand it to agy by
+  the rules below, and say in one line why or why not. Default to hand-off mode with checks (§4); the
+  user watches the runs and reviews the diffs. Raise any `unattributed` files, denials or failed checks
+  with the user before moving on. With a task, start on it.
+- **`/agy --usage [folder]`** — all of the above, plus keep a usage log the user can hand back for
+  review (format below). `folder` defaults to the repo root.
+
+### `--usage` log format
+
+Keep `AGY-LOG.md` in the folder; create it if missing, append if it exists, never rewrite old rows.
+
+```
+## Owner meter
+| when | Claude 5-hour % | Claude weekly % |          ← ask the user before the first job and after the last
+
+## Jobs                                                ← one row per job, done by agy or by you
+| # | job id | task | done by | model | rounds | agy s | agy tokens | 5 h / weekly quota drop % |
+  denials | state | clean | unattributed | Claude calls (prep / wait+audit) | checked on disk | fixes, by whom |
+
+## Friction                                            ← one line per problem
+- date | job id | permissions / verdict / report / brief / tool bug | what happened | cost (calls, minutes)
+```
+
+Take agy numbers from the verdict or `agy_status`, never from memory; rounds, agy seconds and agy tokens
+are cumulative per job, so log the final values once. Jobs you did yourself get `done by: Claude`, the
+reason in `task`, and `–` in the agy columns. Don't edit the log while an agy job is running (the scope
+check would flag it); update it after each verdict.
+
+## When to use agy at all
+
+Five benchmarks (README): per fresh run agy never saved Claude tokens, and it is 10–35× slower.
+Inside a session that has already loaded this skill and the agy tools (~20k, once), a hand-off job
+added 0.15–0.67× the new tokens of doing the work (estimate, n = 1). Gemini quota is the cheap part.
+So agy is **opt-in**: use it when the user asks, for several jobs in one session, when Claude's
+usage limit is nearly spent (Gemini is a separate pool), for long unattended runs, or for volume
+too large for one Claude read. Otherwise do the work yourself and say so in one line.
 
 **Roles in a job.** This session plans, decides and writes the brief with machine checks; agy
 does the mechanical work; the **user** watches the run and reviews the diff (hand-off mode,
