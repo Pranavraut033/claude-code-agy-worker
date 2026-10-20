@@ -233,6 +233,20 @@ more only when that flags something or the owner asks. Machine checks stay requi
 caught benchmark 4's empty first round at once. Whether this finally puts Claude's side below doing the work
 itself is benchmark 5's question.
 
+### Benchmark 5: hand-off mode, and a loophole
+
+It didn't put Claude's side below doing the work: 0.99×, 1.15× and 1.11× Claude alone, only 1–6k under full audit.
+The diff reads were never the cost; the brief, the skill read and each subagent's fixed start are. The light audit
+missed nothing the hidden checks would have caught.
+
+The audit found something more important. In the migration, agy's log showed 10 edits to two files, yet 78 files
+had changed, all with the same timestamp. agy had written Python into `app/handlers/__init__.py` and run it through
+the one command it was allowed, `python3 -m unittest`, which imports the package: first to list the files (it had
+no command for that), then to rewrite all 78 in one pass. Then it removed the script. The allow-list said "only the
+test runner"; in practice, a command that runs repo code runs whatever agy writes. The verdict had listed those
+files apart, but `clean` stayed true. v0.5.1 makes such `unattributed` files fail `clean`, forbids the trick in the
+guard, and says plainly in the README that granting a test runner is granting code execution.
+
 ## 8. Principles we ended up with
 
 - **Measure before claiming.** Our intuition ("offloading saves tokens") was wrong twice.

@@ -155,9 +155,13 @@ restarts agy on the same conversation with the new rules, context kept (measured
 **Default: hand-off with a light audit.** `agy_start(…, checks=[…], handoff=True)`; give the
 user the returned `watch_cmd` (a live view that ends with each check, `clean`, and the `git diff`
 command to review); run `wait_cmd` in the background; when it wakes you, read the verdict and
-report in ≤3 lines: **done or not** (`state`, `clean`, each check, `out_of_scope`, `denied`) and
+report in ≤3 lines: **done or not** (`state`, `clean`, each check, `out_of_scope`, `denied`,
+`unattributed`) and
 **quality at a glance** from `sample` (one changed file's diff, ≤1,500 chars) — does it look like
-the brief asked? Read nothing else unless the verdict or the sample flags a problem. Then end
+the brief asked? **`unattributed` not empty** means files changed with no agy edit step: another
+session, or agy ran code it wrote through an allowed command (it once hid a migration script in
+`__init__.py` and ran it via the test runner). Say so to the user and read one of those files.
+Read nothing else unless the verdict or the sample flags a problem. Then end
 your turn; the agy session has already ended (`agy_resume` restarts it on the same conversation
 if the user wants a fix-up). That is ~3 calls and one small read.
 

@@ -56,6 +56,8 @@ moving on. Follow these rules exactly:
   is denied and ends your run.
 - A subagent may only read and research for you; it never edits files or runs commands. Do the
   edits yourself.
+- Never write code into a file so that an allowed command runs it (a test file, `__init__.py`,
+  conftest, a config): that is running an unlisted program. Edit each file with your file tools.
 - Run every command in the foreground and wait for it to finish; never leave background tasks.
 - Do not read outside the repository (library sources, virtualenvs, caches) unless asked to.
 - At most 2 attempts per defect: if a fix does not hold after 2 tries, stop, mark it failed with
@@ -489,8 +491,12 @@ def _verdict(job):
         d = agy_diff(job, max_chars=0)
         v.update(out_of_scope=d["out_of_scope"], not_from_agy_edits=d["not_from_agy_edits"],
                  stat=d["stat"].strip().splitlines()[-1:] or ["no changes"])
-        if st.get("edits"):  # light quality check for free: one changed file, capped
-            pick = st["edits"][len(st["edits"]) // 2]  # ponytail: middle file, not random; the first is often trivial
+        # changed inside the package without an agy edit step: another session, or agy running code it
+        # wrote (benchmark 5: a migration script hidden in __init__.py, run via the allowed test command)
+        v["unattributed"] = [f for f in d["not_from_agy_edits"] if _allowed(m, _abs(m, f))]
+        changed = [f for f in d["changed"] if f not in d["out_of_scope"]]
+        if changed:  # light quality check for free: one changed file, capped
+            pick = changed[len(changed) // 2]  # ponytail: middle file, not random; the first is often trivial
             v["sample"] = {"file": pick, "diff": agy_diff(job, files=[pick], max_chars=1500)["diff"]}
     # run the checks on every finished round: agy can finish its work and then get a 503 (status
     # ERROR), and the checks, not agy's status, decide whether the work is good
@@ -499,7 +505,7 @@ def _verdict(job):
     v["all_checks_pass"] = all(c["ok"] for c in checks) if checks else None
     finished = st["state"] == "done" or bool(st.get("agy_error") and st.get("report"))
     v["clean"] = (finished and not st.get("denied_now") and not v.get("out_of_scope")
-                  and v["all_checks_pass"] is not False)
+                  and not v.get("unattributed") and v["all_checks_pass"] is not False)
     (JOBS / job / f"verdict-r{st['round']}.json").write_text(json.dumps(v))
     return v
 
