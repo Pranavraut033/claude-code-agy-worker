@@ -1,17 +1,20 @@
 ---
 name: agy
-description: Run the Antigravity CLI (agy) as an agentic worker through the agy-worker MCP server — this session plans the work into multi-task work packages, briefs agy, monitors long runs (minutes to an hour), audits every package and steers follow-up rounds. Use when the user says /agy, "hand this to agy/Antigravity/Gemini", or wants a body of mechanical work done by agy — building or updating many files, scaffolding records, applying a spec across a codebase, research legwork (search, download, transcribe), multi-step pipelines with checks. Not for small tasks this session can finish in a handful of tool calls (agy costs more there — see "Too small for agy") and not for decisions — those stay with this session.
+description: Run the Antigravity CLI (agy) as an agentic worker through the agy-worker MCP server — this session plans the work into multi-task work packages, briefs agy, hands the run to the user to watch, and reads one verdict (light audit; full audit on request). Opt-in, not a default: benchmarks show agy does not cut Claude tokens. Use when the user says /agy or "hand this to agy/Antigravity/Gemini", when Claude's usage limit is nearly spent, for long unattended runs (renders, build chains, test suites), or for volume too large for one Claude read (hundreds of files or pages). Not for work this session can just do, and not for decisions — those stay with this session.
 ---
 
-# /agy — Claude orchestrates, agy works, Claude audits
+# /agy — Claude briefs, agy works, the user watches, Claude checks the verdict
 
-**Roles are fixed.** This session is the eyes and brain: it plans, splits work into
-packages, writes briefs, monitors, audits and decides. agy is the hands and legs: every
-mechanical step — editing code and files, writing records, scaffolding, running checks,
-research legwork (searching, downloading, transcribing) — goes to agy, unless it is too small
-for agy (below). The session does
-not hand-edit files agy could edit and does not spawn Claude subagents for that work. It
-still reads files and runs checks to audit. If agy fails a package twice, report to the
+**When to use agy at all.** Four benchmarks (README) found no Claude-token saving: briefing,
+waiting and auditing cost about as much Claude reading as doing the work, and agy is 10–35×
+slower. Gemini quota is the cheap part. So agy is **opt-in**: use it when the user asks, when
+Claude's usage limit is nearly spent (Gemini is a separate pool), for long unattended runs, or
+for volume too large for one Claude read. Otherwise do the work yourself and say so in one line.
+
+**Roles in a job.** This session plans, decides and writes the brief with machine checks; agy
+does the mechanical work; the **user** watches the run and reviews the diff (hand-off mode,
+§4); this session reads one verdict — a light audit — and reads diffs only when the verdict
+flags something or the user asks for a full audit. If agy fails a package twice, report to the
 user and ask before doing it yourself. Exception: files under `~/.claude/` (skills, MCP
 servers, settings) — Claude Code's safety check blocks agy editing them, so the session
 edits those itself.
@@ -147,17 +150,29 @@ session survives. agy reads its rules only at startup, so after a denial (`denie
 command): audit what landed, grant the rule (or forbid the command), then `agy_resume` — it
 restarts agy on the same conversation with the new rules, context kept (measured: 11.5 s).
 
-## 4. The loop: start, wait, read one verdict
+## 4. The loop: hand-off, then one verdict
+
+**Default: hand-off with a light audit.** `agy_start(…, checks=[…], handoff=True)`; give the
+user the returned `watch_cmd` (a live view that ends with each check, `clean`, and the `git diff`
+command to review); run `wait_cmd` in the background; when it wakes you, read the verdict and
+report in ≤3 lines: **done or not** (`state`, `clean`, each check, `out_of_scope`, `denied`) and
+**quality at a glance** from `sample` (one changed file's diff, ≤1,500 chars) — does it look like
+the brief asked? Read nothing else unless the verdict or the sample flags a problem. Then end
+your turn; the agy session has already ended (`agy_resume` restarts it on the same conversation
+if the user wants a fix-up). That is ~3 calls and one small read.
+
+**Full audit only when the user asks** (or for factual/user-facing/security work, §5): drop
+`handoff`, and audit per §5.
 
 Three calls per package: `agy_start(…, checks=[…])`; run the returned `wait_cmd` as a
 **background** shell task (Bash with `run_in_background: true`); read the verdict it prints.
 The waiter blocks until the job leaves `running`, runs the checks, and prints one compact JSON
 verdict; the harness wakes you once. Meanwhile do other work or end your turn — no `agy_wait`
 loop, no polling. `agy_status` returns the last verdict again for a finished round. To let the
-user watch live, give them the same command with `watch <job>` instead of `wait <job>`.
+user watch live, give them `watch_cmd`.
 
 The verdict has `state`, `elapsed_s`, `tokens`, `quota_drop_pct`, `report`, `edits`, `denied` (naming
-the command), `out_of_scope`, `not_from_agy_edits`, `stat`, each check (`cmd`, `rc`, `ok`, last
+the command), `out_of_scope`, `not_from_agy_edits`, `stat`, `sample` (one changed file's diff, capped), each check (`cmd`, `rc`, `ok`, last
 400 chars) and `all_checks_pass`; **`clean`** is true when the round is done, nothing was denied
 or out of scope, and every check passed. Intervene when it shows:
 - `alert: edits outside allowed_files` (the waiter exits early with it) → `agy_cancel`, audit, decide;
@@ -170,7 +185,7 @@ or out of scope, and every check passed. Intervene when it shows:
   or "AI credits balance is too low" error is not transient → `agy_usage()`, then switch
   model family or wait for the reset it shows.
 
-## 5. Audit each package — never trust agy's report
+## 5. Full audit (on request) — never trust agy's report
 
 Audit in tiers — the expensive reading goes where errors would hurt:
 1. **Mechanical gates (free, already in the verdict):** `out_of_scope` empty or justified

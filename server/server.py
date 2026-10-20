@@ -397,7 +397,7 @@ mcp = MCPServer("agy-worker", instructions=(
 def agy_start(brief: str, cwd: str, allowed_files: list[str], model: str = DEFAULT_MODEL,
               timeout_s: int = 3600, network: bool = False, checks: list[str] | None = None,
               check_timeout_s: int = 600, lend: list[str] | None = None,
-              mcp: list[str] | None = None) -> dict:
+              mcp: list[str] | None = None, handoff: bool = False) -> dict:
     """Start agy on a work package (several related tasks), in place in `cwd` (absolute path). `brief` says the
     exact change, what done means, and which checks to run. `allowed_files` are the only
     paths agy may edit (absolute, or relative to cwd; a directory or a glob also works).
@@ -409,8 +409,10 @@ def agy_start(brief: str, cwd: str, allowed_files: list[str], model: str = DEFAU
     files for this job (Claude skill names, `plugin:skill`, or paths; default ["ponytail"], pass []
     for none); they are inlined into the brief. `mcp` lends Claude's MCP servers ("server" for all its
     tools, "server/tool" for one), enabled for this job only and released by agy_close/agy_cancel.
-    Returns {job, git, wait_cmd} immediately: run wait_cmd as a background shell task and read
-    the verdict it prints."""
+    Returns {job, git, wait_cmd, watch_cmd} immediately: run wait_cmd as a background shell task and
+    read the verdict it prints. `handoff=True`: the owner audits, not you — give them watch_cmd (a
+    live view that ends with the checks and the verdict) and end your turn; the agy session ends by
+    itself after this round (agy_resume restarts it on the same conversation)."""
     cwd = os.path.realpath(os.path.expanduser(cwd))
     if not os.path.isdir(cwd):
         return {"error": f"cwd {cwd} is not a directory"}
@@ -437,7 +439,10 @@ def agy_start(brief: str, cwd: str, allowed_files: list[str], model: str = DEFAU
     m["quota_before"] = {f'{p["pool"]} · {p["window"]}': p["left_pct"] for p in pools}
     (JOBS / m["id"]).mkdir(parents=True)
     _launch(m, _guard(m, brief))
-    out = {"job": m["id"], "git": bool(top), "wait_cmd": _wait_cmd(m["id"])}
+    if handoff:  # nobody will agy_close it: EOF makes agy finish this turn, then exit
+        PROCS.pop(m["id"]).stdin.close()
+    out = {"job": m["id"], "git": bool(top), "wait_cmd": _wait_cmd(m["id"]),
+           "watch_cmd": _wait_cmd(m["id"]).replace(" wait ", " watch ")}
     if not top:
         out["warning"] = "not a git repo: agy_diff and agy_discard cannot work for this job"
     own = _repo_agy_config(top or cwd)
@@ -484,6 +489,9 @@ def _verdict(job):
         d = agy_diff(job, max_chars=0)
         v.update(out_of_scope=d["out_of_scope"], not_from_agy_edits=d["not_from_agy_edits"],
                  stat=d["stat"].strip().splitlines()[-1:] or ["no changes"])
+        if st.get("edits"):  # light quality check for free: one changed file, capped
+            pick = st["edits"][len(st["edits"]) // 2]  # ponytail: middle file, not random; the first is often trivial
+            v["sample"] = {"file": pick, "diff": agy_diff(job, files=[pick], max_chars=1500)["diff"]}
     # run the checks on every finished round: agy can finish its work and then get a 503 (status
     # ERROR), and the checks, not agy's status, decide whether the work is good
     checks = _run_checks(m) if st["state"] != "running" else []
@@ -1090,6 +1098,14 @@ def watch_cli(job=None):
                           ("edits: ", "bold"), ", ".join(s["edits"]) or "none", "\n",
                           ("denied: ", "bold"), (str(s["denied"]) if s["denied"] else "none",
                                                  "red" if s["denied"] else ""))
+    v = _verdict(job)  # runs the checks: in hand-off mode this is the only verdict
+    for c in v["checks"]:
+        facts.append(f"\n{'✓' if c['ok'] else '✗'} {c['cmd']}", "green" if c["ok"] else "red")
+    if v.get("out_of_scope"):
+        facts.append(f"\nout of scope: {', '.join(v['out_of_scope'])}", "red")
+    facts.append(f"\nclean: {v['clean']}", "bold green" if v["clean"] else "bold red")
+    if m.get("top"):
+        facts.append(f"\nreview: git -C {m['top']} diff", "dim")
     con.print(Panel(facts, title="result", border_style=color, expand=False))
     body = s["report"] or s.get("hint") or s.get("stderr") or ""
     if body:

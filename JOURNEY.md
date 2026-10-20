@@ -220,6 +220,19 @@ What is left untested, and where agy's design should fit best:
 - **reading-heavy research**, where agy reads hundreds of pages and Claude reads a summary (still
   spot-checked — agy's first research report had two load-bearing errors).
 
+### What we changed after benchmark 4 (v0.5.0)
+
+If agy doesn't save Claude tokens, and Gemini tokens are the cheap part, routing every task through agy is a loss: same
+Claude cost, 10–35× slower. So agy became **opt-in**: when the owner asks, when Claude's usage limit is nearly spent
+(Gemini is a separate pool), for long unattended runs, and for volume too large for one Claude read.
+
+The other change attacks the part of the cost that varies: Claude's diff reading. In **hand-off mode** (now the
+default) the owner watches the run and reviews the diff; Claude keeps a light audit — one verdict saying whether the
+work was done (state, checks, scope) plus a capped diff sample of one changed file for a quality glance — and reads
+more only when that flags something or the owner asks. Machine checks stay required: they cost Claude nothing and
+caught benchmark 4's empty first round at once. Whether this finally puts Claude's side below doing the work
+itself is benchmark 5's question.
+
 ## 8. Principles we ended up with
 
 - **Measure before claiming.** Our intuition ("offloading saves tokens") was wrong twice.
