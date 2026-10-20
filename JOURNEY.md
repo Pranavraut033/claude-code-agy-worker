@@ -272,16 +272,18 @@ costs Claude 0.99–1.21× the tokens of doing it directly, and takes 10–35× 
 - **Spec-to-file builds:** applying a detailed, decided spec to a large file (a 700-line scene in 11 min).
 
 **Improvements worth trying**
-1. **A lean headless orchestrator** (`claude -p --bare --tools … --strict-mcp-config`, or the Agent SDK with only
-   the agy tools). Each benchmark orchestrator paid an ~85–95k fixed start; this is the one lever that attacks it.
-2. **A cheap model to babysit** (Haiku for start, wait and verdict), with the strong model only writing the brief.
-3. **Batching:** several packages per brief, so the fixed cost is paid once.
-4. **A sandbox for commands that run repo code.** A granted test runner executes whatever agy writes (benchmark 5);
+1. **Batching:** several packages per brief, so the fixed cost is paid once.
+2. **A sandbox for commands that run repo code.** A granted test runner executes whatever agy writes (benchmark 5);
    `unattributed` detects it after the fact, a container or a read-only copy for checks would prevent it.
-5. **Smaller fixes:** count agy's subagent tokens in the verdict; close idle live sessions automatically; make the
+3. **Smaller fixes:** count agy's subagent tokens in the verdict; close idle live sessions automatically; make the
    desktop app's first connection reliable (it caches one failed connect for 15 min, often right after an update).
-6. **Benchmarks not yet run:** judgment at a scale that does not fit one read (hundreds of inputs), reading-heavy
+4. **Benchmarks not yet run:** judgment at a scale that does not fit one read (hundreds of inputs), reading-heavy
    research, and n > 1 for any of it.
+
+**Deliberately not planned (keep it simple):** a separate lean headless orchestrator (`claude -p --bare` or the Agent
+SDK) or a Haiku babysitter. Each adds a second process to run and engineer, for a saving nobody has measured. And in
+real use the orchestrator is the session you already have open, so the ~85–95k fixed start each benchmark subagent
+paid is not paid again: the real cost is only the brief, the start and the verdict.
 
 ## 10. Help wanted
 

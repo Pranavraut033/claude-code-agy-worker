@@ -136,7 +136,7 @@ agy **still costs** Claude tokens, even on the judgment task: orchestration (bri
 - 📦 **Volume beyond one Claude read**: hundreds of files or records with a machine verifier.
 - 📐 **Spec-to-file builds**: applying a detailed, already-decided spec to a large file.
 
-Worth trying next: a lean headless orchestrator (`claude -p --bare` or the Agent SDK) to cut the ~85–95k fixed start per job, a Haiku babysitter, batching packages, a sandbox for commands that run repo code, and benchmarks at a volume Claude can't read in one go. Details: [JOURNEY.md §9](JOURNEY.md#9-where-it-stands-and-what-could-come-next).
+Worth trying next: batching packages, a sandbox for commands that run repo code, and benchmarks at a volume Claude can't read in one go. A separate headless orchestrator or babysitter model is deliberately not planned: it adds a second process for an unmeasured saving. Details: [JOURNEY.md §9](JOURNEY.md#9-where-it-stands-and-what-could-come-next).
 
 ## 📚 More
 
