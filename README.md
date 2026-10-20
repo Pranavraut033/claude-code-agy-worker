@@ -122,7 +122,17 @@ The rows above ran with agy's own MCP servers, skills and plugins loaded into ev
 | 40-file migration + type hints | 91k → 108k (1.19×) | 38 s → 1,406 s | 6/6 both |
 | 30-ticket triage (judgment) | 86k → 101k (1.18×) | 26 s → 363 s | 4/4 both, 97 % category accuracy both |
 
-[Benchmark 5](benchmarks/05-handoff/RESULTS.md) (v0.5.0) reran the same three tasks in **hand-off mode** (Claude reads one verdict, no diff reads): CSV 96k (0.99× Claude alone), migration 105k (1.15×), triage 95k (1.11×), all hidden checks passing. Skipping the diff reads saved only 1–6k against full audit, so most of the cost is the subagent's fixed start (~85–95k) plus the brief.
+[Benchmark 5](benchmarks/05-handoff/RESULTS.md) (v0.5.0) reran the same three tasks in **hand-off mode** (Claude reads one verdict, no diff reads): CSV 96k (0.99× Claude alone), migration 105k (1.15×), triage 95k (1.11×), all hidden checks passing. Skipping the diff reads saved only 1–6k against full audit.
+
+**Real-use estimate.** Every benchmark run started at ~70k tokens of fixed context (system prompt, tools, CLAUDE.md, memory), the same in both arms; in real use your open session has already paid that. Removing it, and the one-time skill read (~5k) from the agy arms, leaves what each task added:
+
+| Task | Claude alone | agy, full audit | agy, hand-off |
+|---|---|---|---|
+| CSV feature | 25k | 20k (0.78×) | 19k (0.74×) |
+| 40-file migration | 20k | 33k (1.62×) | 29k (1.42×) |
+| 30-ticket triage | 15k | 25k (1.66×) | 19k (1.25×) |
+
+So agy saves on the CSV feature (~6k) and costs more on the other two: Claude alone scripted the migration in 7 calls and read all 30 tickets in one. This counts context growth only; in a long real session every extra tool call also re-reads the whole (cached) context, which favours fewer calls (Claude alone: 3–7, hand-off: 5–16).
 
 agy **still costs** Claude tokens, even on the judgment task: orchestration (brief, wait, verdict, audit) has a fixed cost of ~95–100k, and Claude alone is cheap at anything that fits in one read — it triaged all 30 tickets in 3 tool calls. The skill therefore keeps small work in Claude ("too small for agy"). Where agy can still pay: packages long enough that Claude would otherwise spend many turns waiting (renders, build chains), and keeping your Claude session limit free while Gemini does the hours of work. Untested: reading-heavy research, and tasks far larger than one context. Plans, fixtures, checks and raw numbers: [`benchmarks/`](benchmarks/); the full story, including 22 jobs of real project use: [JOURNEY.md](JOURNEY.md).
 

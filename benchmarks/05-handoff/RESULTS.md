@@ -77,3 +77,17 @@ n = 1, Sonnet orchestrator, Claude-written fixtures and checks, the judgment lab
   diff sample is now taken from all changed files, not only agy's own edits; the guard forbids writing code for an
   allowed command to run; the README says granting a test runner is granting code execution.
 - This also means the large run's result is the scripted path Claude alone took (benchmark 2), done by agy.
+
+## Real-use estimate (added afterwards)
+Per run, from the subagent transcripts: final context minus the first call's context (~70k in every run: system
+prompt, tools, CLAUDE.md, memory), and for agy arms minus the SKILL.md read (17.9k/19.3k chars ≈ 4.5k/4.8k tokens),
+because a real session pays the start once and reads the skill once.
+
+| Task | A added | B (bench 4) added | C added | B/A | C/A |
+|---|---:|---:|---:|---:|---:|
+| small T2 | 25.4k | 24.2k − 4.5k = 19.7k | 23.6k − 4.8k = 18.8k | 0.78× | 0.74× |
+| large | 20.1k | 37.0k − 4.5k = 32.6k | 33.4k − 4.8k = 28.5k | 1.62× | 1.42× |
+| judgment | 15.0k | 29.4k − 4.5k = 24.9k | 23.5k − 4.8k = 18.7k | 1.66× | 1.25× |
+
+Only small T2 saves. Context growth only: extra tool calls each re-read the whole cached context in a real session.
+
