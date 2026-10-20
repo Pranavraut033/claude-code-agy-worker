@@ -280,8 +280,8 @@ costs Claude 0.99–1.21× the tokens of doing it directly, and takes 10–35× 
 4. **Benchmarks not yet run:** judgment at a scale that does not fit one read (hundreds of inputs), reading-heavy
    research, and n > 1 for any of it.
 
-**Deliberately not planned (keep it simple):** a separate lean headless orchestrator (`claude -p --bare` or the Agent
-SDK) or a Haiku babysitter. Each adds a second process to run and engineer, for a saving nobody has measured. And in
+**Deliberately not planned (over-engineering):** a separate lean headless orchestrator (`claude -p --bare` or the
+Agent SDK) or a Haiku babysitter. Each adds a second worker to run and maintain, for a saving nobody has measured. And in
 real use the orchestrator is the session you already have open, so the ~85–95k fixed start each benchmark subagent
 paid is not paid again: the real cost is only the brief, the start and the verdict.
 
