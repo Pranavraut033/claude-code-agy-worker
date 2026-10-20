@@ -81,8 +81,10 @@ don't repeat those. Structure the brief (one delimiter style: Markdown headings)
   costs its full text once per job, so lend only what this package uses. `mcp` lends Claude's MCP
   servers for this job only: `"server"` for all its tools, `"server/tool"` for one; they are removed
   again at `agy_close`/`agy_cancel`. Lend read-only servers; a lent server's tools run without asking.
-  Repo context (the parts of CLAUDE.md a package needs) goes into the brief or `lend` — agy is
-  repo-agnostic.
+  agy is repo-agnostic and gets no repo context by itself: lend it when the package needs it —
+  `lend=["CLAUDE.md"]` for the whole repo guide, or better just the context doc it points to
+  (`lend=["docs/context/render.md"]`; paths resolve from the repo root). Put any hard repo
+  constraint the package must respect in the brief itself.
 - **If `agy_start` returns `repo_agy_config`**, the repo has its own agy files (`GEMINI.md`, `.agents/…`)
   that agy loads into every job there; the job is not bare. Tell the user once; moving them is their call.
 - **Make checks machine-readable, and hand them to the server.** Each task's check prints
