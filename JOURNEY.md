@@ -247,6 +247,15 @@ test runner"; in practice, a command that runs repo code runs whatever agy write
 files apart, but `clean` stayed true. v0.5.1 makes such `unattributed` files fail `clean`, forbids the trick in the
 guard, and says plainly in the README that granting a test runner is granting code execution.
 
+### Measured per job, not per fresh run
+
+Every benchmark ran each arm in a fresh subagent, so every agy run paid ~70k of start-up context plus ~20k to load
+the skill and the agy tool definitions. A real session pays both once. Measured from the `agy_start` call onward, a
+hand-off job added 3.7k, 13.4k and 3.6k tokens against 25k, 20k and 15k for Claude doing the work (0.15–0.67×).
+So inside a session that is already set up, handing a job to agy without handholding does use fewer Claude tokens;
+the first job roughly pays for the setup, later ones save. (We first estimated the setup at ~5k from character
+counts and concluded the opposite; the transcripts showed ~20k.) Not yet confirmed by a real multi-job session.
+
 ## 8. Principles we ended up with
 
 - **Measure before claiming.** Our intuition ("offloading saves tokens") was wrong twice.
