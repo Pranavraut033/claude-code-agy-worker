@@ -65,7 +65,8 @@ n = 1, Sonnet orchestrator, Claude-written fixtures and checks (including the ju
   as a file list and refused to create `summaries/*`. The server already treated folders and globs as covering new files;
   only the wording was wrong. Fixed in v0.4.2 ("Create or edit files ONLY within …; a folder covers every file under it").
   That wasted round cost the B arm one extra `agy_resume` plus its verdict read.
-- The "researcher subagent": agy 1.4.3 has a built-in `invoke_subagent` tool and called it once in round 2. v0.4.2's guard
-  forbids subagents (they spend Gemini tokens the verdict does not show).
+- The "researcher subagent": agy 1.4.3 has a built-in `invoke_subagent` tool and called it once in round 2. It listed and read the
+  30 tickets for ~13k Gemini tokens (11.5k in, 2k out), which the verdict does not show. v0.4.3 allows subagents for
+  read-only research only.
 - The plan's judgment check `ls summaries | wc -l` contains a pipe while the guard said "no pipes"; agy ran it, but the
   guard now says a named command line may contain one.

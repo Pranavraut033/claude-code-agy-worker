@@ -211,8 +211,8 @@ is the whole story at this size.
 
 The audit also found a bug in our own guard. It said "Edit ONLY these files: <folder>", and agy took the folder
 for a file list and refused to create the new files, which cost the triage run a wasted round. The server had
-always accepted folders; v0.4.2 fixes the wording, and forbids agy's built-in `invoke_subagent` tool, which it
-called once.
+always accepted folders; v0.4.2 fixes the wording. agy also has a built-in `invoke_subagent` tool, which it
+called once to read the tickets (~13k Gemini tokens); v0.4.3 allows it for read-only research.
 
 What is left untested, and where agy's design should fit best:
 

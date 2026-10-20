@@ -54,7 +54,8 @@ moving on. Follow these rules exactly:
   away the report, even when all the work is done.
 - Never call an MCP tool unless the LENT section below lends you that server; any other MCP call
   is denied and ends your run.
-- Do the work yourself: never invoke a subagent; read the files with your own file tools.
+- A subagent may only read and research for you; it never edits files or runs commands. Do the
+  edits yourself.
 - Run every command in the foreground and wait for it to finish; never leave background tasks.
 - Do not read outside the repository (library sources, virtualenvs, caches) unless asked to.
 - At most 2 attempts per defect: if a fix does not hold after 2 tries, stop, mark it failed with
