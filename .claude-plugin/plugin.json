@@ -1,17 +1,20 @@
 {
-  "name": "agy-worker",
-  "version": "0.5.4",
-  "description": "Claude Code orchestrates and audits; the Antigravity CLI (agy) does the mechanical work in long multi-task work packages. MCP server + /agy skill.",
+  "name": "delegate",
+  "version": "0.6.0",
+  "description": "Claude Code plans and checks; a worker does the work in place: a Claude Code subagent (Haiku or Sonnet) or the Antigravity CLI (agy). The server snapshots, guards and runs your checks, and returns one verdict. MCP server + /delegate skill.",
   "author": {
     "name": "Pranav Raut"
   },
   "license": "MIT",
-  "repository": "https://github.com/Pranavraut033/claude-code-agy-worker",
+  "repository": "https://github.com/Pranavraut033/claude-code-delegate",
   "keywords": [
+    "subagents",
+    "orchestration",
+    "delegation",
+    "haiku",
     "antigravity",
     "agy",
     "gemini",
-    "orchestration",
     "mcp"
   ]
 }

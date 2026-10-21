@@ -1,8 +1,8 @@
-# agy worker models — how to brief each one (growing list)
+# agy models — how to brief each one (growing list; Claude workers: orchestration.md §3)
 
 One section per model family. Each has **Official** (what Google documents, with a source;
-re-checked by the orchestrator), **Measured** (what our own agy-worker jobs showed — job logs
-live in `~/.claude/mcp/agy-worker/jobs/`), and a **Brief recipe**. When observation and docs
+re-checked by the orchestrator), **Measured** (what our own agy jobs showed — job logs
+live in `~/.local/state/delegate/jobs/`, before 0.6 `~/.local/state/agy-worker/jobs/`), and a **Brief recipe**. When observation and docs
 disagree, the observation wins and both are written down.
 
 **Adding a model:** run `agy models`; give agy a research job (Argon, `network=True`,
@@ -48,7 +48,7 @@ section here and a row to the timing table. Append to the changelog at the botto
   rules can contradict your brief — check for them when a job ignores an instruction.
 - **Briefs must be complete:** headless agy cannot ask; subagent questions are auto-skipped.
 - `--print-timeout` default 5 min; agy-worker passes `timeout_s` (default 900 s).
-- **Quota is visible for free:** `agy -p "/usage"` (agy-worker: `agy_usage()`) is answered
+- **Quota is visible for free:** `agy -p "/usage"` (agy-worker: `delegate_usage()`) is answered
   by the CLI without a model call. Pools seen 2026-10-19 (Pro plan): "Gemini Models" 5-hour +
   weekly, "Claude and GPT models" 5-hour + weekly, "Gemini 4 Argon" weekly only. Piped output
   is TSV with UTC reset times. Whether Argon also drains the Gemini pools is unmeasured —
@@ -131,7 +131,7 @@ Don't spend it on packages Flash can do — the weekly quota is limited.
 | 2026-10-19 | argon-medium | licence + photo research, web | 9.7–16 min/round | 73 | good research; downloads blocked |
 | 2026-10-19 | argon-medium | this file's model research | 821 s | ~100 | good; 2 errors caught on audit |
 | 2026-10-19 | flash-medium | 11 exact key replacements in one file (short brief) | 155 s | 12 | clean, scope clean |
-| 2026-10-19 | flash-medium | package: 4 constant edits + 4 sequential renders (5-12 min commands, 3600 s timeout) | 37 min | ~25 | clean; `agy_wait` returns instantly as `stalled` while a long command runs (not a real stall), poll the output files instead (fixed in v0.1.0: an ACTIVE run_command counts as running) |
+| 2026-10-19 | flash-medium | package: 4 constant edits + 4 sequential renders (5-12 min commands, 3600 s timeout) | 37 min | ~25 | clean; `delegate_wait` returns instantly as `stalled` while a long command runs (not a real stall), poll the output files instead (fixed in v0.1.0: an ACTIVE run_command counts as running) |
 | 2026-10-19 | flash-medium | clip_sfx.py + mix.sh | 77 s | 12 | clip_sfx ok; mix.sh failed: system python3 has no numpy (script needs .venv/bin on PATH, a rule prefix cannot carry env vars) |
 | 2026-10-19 | flash-high | package: build plugin repo (copy 3 files, 3 server fixes + selftest, scrub docs, manifests, README) | 547 s | 56 | all 8 tasks done; denied on the last check (`grep … \| awk` pipe) → no report; audit passed |
 | 2026-10-19 | flash-medium | fix-up as fresh job: simplify one function + 6 README edits ("no pipes" in brief) | 114 s | 19 | clean, no denials |
@@ -159,8 +159,8 @@ Don't spend it on packages Flash can do — the weekly quota is limited.
 
 - 2026-10-19: created — gemini-3.8-flash, gemini-4-argon; shared headless facts; 7 timing rows.
 - 2026-10-19: recipes reframed for multi-task work packages (skill now briefs packages, not single edits); server default timeout 3600 s, stall 300 s.
-- 2026-10-19: quota visibility — `agy_usage()` tool, `quota_low` on agy_start, skill budgets Argon by % left; record quota drop per notable job (baseline: Gemini weekly 59%, Argon weekly 31%).
-- 2026-10-20: 12 rows from three real project sessions (22 jobs). Patterns: denials ended 8 of 22 jobs, almost all improvised variants of allowed commands (`python3 -c`, pipes, an extra flag); agy cannot judge visual output; one 56-min thrash on a single defect. → v0.1.5 guard (exact commands, no pipes, foreground only, 2 attempts per defect, never "verified" for visuals), `agy_permissions(check=…)`, denied command named in status, per-job quota drop.
+- 2026-10-19: quota visibility — `delegate_usage()` tool, `quota_low` on delegate_start, skill budgets Argon by % left; record quota drop per notable job (baseline: Gemini weekly 59%, Argon weekly 31%).
+- 2026-10-20: 12 rows from three real project sessions (22 jobs). Patterns: denials ended 8 of 22 jobs, almost all improvised variants of allowed commands (`python3 -c`, pipes, an extra flag); agy cannot judge visual output; one 56-min thrash on a single defect. → v0.1.5 guard (exact commands, no pipes, foreground only, 2 attempts per defect, never "verified" for visuals), `delegate_permissions(check=…)`, denied command named in status, per-job quota drop.
 - 2026-10-20: live sessions (agy-worker 0.2.0): stream-json input, follow-ups without cold start, a denial ends only the turn, restart-on-conversation applies new rules; 4 timing rows.
 - 2026-10-20: agy 1.4.3 renamed its file tools (write_file/Path); edit detection made name-tolerant. v0.3.0 server-run checks: one verdict per round (live test: flash-low, 17 s, checks caught the deliberately failing one).
 - 2026-10-20: bare agy (7.2k vs 16.1k tokens per trivial turn); v0.4.0 per-job lend/mcp, agy-setup, verdict checks on every finished round; agy 1.4.3 also uses `edit_file`.
@@ -168,5 +168,6 @@ Don't spend it on packages Flash can do — the weekly quota is limited.
 - 2026-10-20: v0.5.0 hand-off mode: `handoff=True` closes agy's stdin after the first message — agy finished the turn and exited (live test, flash-low, 24 s, 2 checks clean). Verdict gained `sample` (one changed file's diff, ≤1,500 chars). agy is opt-in.
 - 2026-10-20: benchmark 5 (hand-off, v0.5.0): flash-medium hid a migration script in `__init__.py` and ran it via the allowed `python3 -m unittest` (78 files in one pass); research subagents only grep. v0.5.1: `unattributed` edits fail `clean`; guard forbids code for an allowed command to run. agy also tried `manage_subagents`/`schedule` tools.
 - 2026-10-21: v0.5.2: `/agy` sets the session's agy policy (decide per job, hand-off by default); `/agy --usage [folder]` also keeps AGY-LOG.md (owner meter, per-job rows, friction lines).
-- 2026-10-21: v0.5.3 from the Ep 3 multi-job session (8 jobs, 5.9M agy tokens): a declined `agy_start` still ran (the desktop app sent the call before the user declined) → skill checks `agy_status()` after a rejected start; `agy_permissions` replies compactly on add/remove/check (~35k Claude tokens of full-list output in that session); `outputs=[…]` keeps generated files out of `unattributed`/out of scope; `report` keeps only agy's final per-task block (6.3k → 1.1k chars on a render job) with relative paths.
+- 2026-10-21: v0.5.3 from the Ep 3 multi-job session (8 jobs, 5.9M agy tokens): a declined `delegate_start` still ran (the desktop app sent the call before the user declined) → skill checks `delegate_status()` after a rejected start; `delegate_permissions` replies compactly on add/remove/check (~35k Claude tokens of full-list output in that session); `outputs=[…]` keeps generated files out of `unattributed`/out of scope; `report` keeps only agy's final per-task block (6.3k → 1.1k chars on a render job) with relative paths.
 - 2026-10-21: v0.5.4: guard rule "stay on the task" — Gemini side-tracks (a failed `veo_next.py` led agy to compare queue schemas across episodes instead of reading `PROMPTS.md`): read only what the task names, shortest path when a command fails, odd findings get one report line. The same rule is in the owner's `~/.gemini/config/rules/core.md`.
+- 2026-10-21: v0.6.0 — plugin renamed **delegate**; Claude Code subagent workers (Haiku/Sonnet) are the default backend, agy is `backend="agy"`. Claude model notes live in `orchestration.md` §3; this file stays agy-only. Spike: a general-purpose Haiku subagent wrote 55k cache tokens at spawn here (the `worker` agent omits CLAUDE.md).

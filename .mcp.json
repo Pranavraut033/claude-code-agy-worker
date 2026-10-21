@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "agy-worker": {
+    "delegate": {
       "command": "uv",
       "args": [
         "run",

@@ -1,14 +1,14 @@
 {
-  "name": "agy-worker",
+  "name": "delegate",
   "owner": {
     "name": "Pranav Raut"
   },
-  "description": "Claude Code orchestrates and audits; the Antigravity CLI (agy) does the mechanical work in long multi-task work packages. MCP server + /agy skill.",
+  "description": "Claude Code plans and checks; a worker does the work in place: a Claude Code subagent (Haiku or Sonnet) or the Antigravity CLI (agy). The server snapshots, guards and runs your checks, and returns one verdict. MCP server + /delegate skill.",
   "plugins": [
     {
-      "name": "agy-worker",
+      "name": "delegate",
       "source": "./",
-      "description": "Claude Code orchestrates and audits; the Antigravity CLI (agy) does the mechanical work in long multi-task work packages. MCP server + /agy skill."
+      "description": "Claude Code plans and checks; a worker does the work in place: a Claude Code subagent (Haiku or Sonnet) or the Antigravity CLI (agy). The server snapshots, guards and runs your checks, and returns one verdict. MCP server + /delegate skill."
     }
   ]
 }

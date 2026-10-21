@@ -1,4 +1,4 @@
-# The journey: building agy-worker, and finding out whether it pays
+# The journey: building agy-worker (now delegate), and finding out whether it pays
 
 This is the build log and the thinking behind it — what we set out to do, what we decided and why,
 what broke, and what the measurements actually said. It is written for anyone trying the same idea
@@ -294,7 +294,33 @@ Agent SDK) or a Haiku babysitter. Each adds a second worker to run and maintain,
 real use the orchestrator is the session you already have open, so the ~85–95k fixed start each benchmark subagent
 paid is not paid again: the real cost is only the brief, the start and the verdict.
 
-## 10. Help wanted
+## 10. 0.6: the worker was never the cost — renamed to delegate
+
+A real 8-job session (Ep 3 of a fan series, 2026-10-20) was the first multi-job test. Every job landed, and
+the numbers moved the question. Measured from the transcript: 208 Claude calls, the context grew to ~540k, so
+each call re-read ~315k cached tokens; orchestration took 13–34 calls per job. A research pass the next day
+(sources in `skills/delegate/references/orchestration.md`) priced it: one Sonnet call at that context ≈ $0.03,
+while a whole Haiku 5.5 worker job is about $0.02. **The orchestrator's calls were the cost; which worker did the
+editing barely mattered.**
+
+So 0.6 does three things:
+- **Claude Code subagents as workers**, Haiku for mechanical clusters and Sonnet for judgment, as the default
+  backend; agy stays as `backend="agy"` for Google's quota and long unattended runs. The server can't spawn a
+  subagent, so it does everything around the run: snapshot, a brief file (the guard and lent skills never enter
+  the orchestrator's context), a guard file; Claude spawns the plugin's `worker` agent with a ~60-token prompt;
+  `delegate_verdict` reads the worker's transcript for edits, denials and tokens, runs the checks and reports.
+- **Enforcement instead of asking.** A plugin PreToolUse hook keeps a worker inside its job's files and exact
+  commands and refuses edits to the files the checks depend on. The research was blunt: "do not cheat" prompts
+  barely move cheating rates, read-only tests do. Unlike agy, a denial comes back as a tool error and the worker
+  carries on.
+- **plan-and-delegate folded in**: plan on the strongest model, cluster by shared files or pattern, tier each
+  cluster at planning time, cheap model first and escalate on failed checks (Haiku → one fix-up → Sonnet →
+  Claude). The owner chose task completion on a cheaper model as the goal, not another benchmark; the `--usage`
+  log's cascade column is where real misses show up.
+
+The plugin is renamed **delegate** because it is no longer about agy. The agy benchmarks stay as history.
+
+## 11. Help wanted
 
 If you have run a Claude-orchestrates-a-cheaper-agent setup and found it **does** save tokens,
 we would love to know what was different: task type, orchestrator setup, model, numbers. Issues

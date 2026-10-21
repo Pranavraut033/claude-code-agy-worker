@@ -3,7 +3,9 @@
 # requires-python = ">=3.10"
 # dependencies = ["mcp>=2.3,<3", "rich>=13"]
 # ///
-"""MCP server: hand mechanical file edits to the Antigravity CLI (`agy`), watch it, audit it.
+"""MCP server for the delegate plugin: hand a planned work package to a worker — a Claude Code subagent
+(the session spawns it with the fields delegate_start returns) or the Antigravity CLI (`agy`, launched here) —
+then check it with one verdict.
 
     uv run --script server.py                # stdio MCP server
     uv run --script server.py selftest       # snapshot/discard check, no agy
@@ -11,16 +13,16 @@
     uv run --script server.py wait <job>     # block until a job ends (background waiter)
     uv run --script server.py usage          # agy quota left
 
-agy edits in place. Before each job the whole working tree is snapshotted into a git tree
+Workers edit in place. Before each job the whole working tree is snapshotted into a git tree
 object through a throwaway index (HEAD, branch and the real index are never touched), so
-agy_diff shows exactly what changed and agy_discard can put agy's files back.
-Job state lives on disk under $AGY_WORKER_HOME/jobs, so jobs outlive a server restart.
+delegate_diff shows exactly what changed and delegate_discard can put the worker's files back.
+Job state lives on disk under $DELEGATE_HOME/jobs, so jobs outlive a server restart.
 """
-import fnmatch, json, os, re, shlex, shutil, signal, subprocess, sys, tempfile, threading, time, uuid
+import fnmatch, hashlib, json, os, re, shlex, shutil, signal, subprocess, sys, tempfile, threading, time, uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-JOBS = Path(os.environ.get("AGY_WORKER_HOME") or Path.home() / ".local/state/agy-worker") / "jobs"
+JOBS = Path(os.environ.get("DELEGATE_HOME") or Path.home() / ".local/state/delegate") / "jobs"
 AGY = shutil.which("agy") or str(Path.home() / ".local/bin/agy")
 SETTINGS = Path.home() / ".gemini/antigravity-cli/settings.json"
 AGY_MCP = Path.home() / ".gemini/config/mcp_config.json"  # agy's global MCP list (CLI, app and IDE share it)
@@ -29,7 +31,7 @@ DEFAULT_LEND = ("ponytail",)  # skills every job borrows unless the caller passe
 DEFAULT_MODEL = "gemini-3.8-flash-medium"
 WRITE_TOOLS = {"replace_file_content", "multi_replace_file_content", "write_to_file", "sed_file",
                "notebook_edit"}
-LOW_PCT = 20  # agy_start flags a pool below this
+LOW_PCT = 20  # delegate_start flags a pool below this
 STALL_S = 300  # Argon can think quietly for minutes; a Flash stall at 5 min is real
 PROCS = {}  # job id -> live Popen (stdin open: a session that takes more messages)
 CUR = {}    # job id -> round number the session's output is being written to
@@ -50,13 +52,8 @@ moving on. Follow these rules exactly:
 - Run only the exact command lines the brief names, character for character (a named line may
   contain a pipe). Never improvise a command: no pipes (|) of your own, no `python3 -c`, no
   sed/awk, no sleep, no extra flags. Read and search files with your file
-  tools, not the shell. A command that is not on the allow-list ends your WHOLE run and throws
-  away the report, even when all the work is done.
-- Never call an MCP tool unless the LENT section below lends you that server; any other MCP call
-  is denied and ends your run.
-- A subagent may only read and research for you; it never edits files or runs commands. Do the
-  edits yourself.
-- Never write code into a file so that an allowed command runs it (a test file, `__init__.py`,
+  tools, not the shell. {deny_rule}
+{backend_rules}- Never write code into a file so that an allowed command runs it (a test file, `__init__.py`,
   conftest, a config): that is running an unlisted program. Edit each file with your file tools.
 - Run every command in the foreground and wait for it to finish; never leave background tasks.
 - Do not read outside the repository (library sources, virtualenvs, caches) unless asked to.
@@ -92,7 +89,39 @@ def _guard(m, brief):
     if m.get("outputs"):
         files += (". The commands you run also write these; never edit them with your file tools: "
                   + ", ".join(m["outputs"]))
-    return GUARD.format(files=files, network=net, brief=brief, lent=lent)
+    if m.get("backend") == "subagent":
+        deny = ("A command that is not listed is denied; never look for a workaround (another command, a "
+                "script, a file another command runs): mark that task BLOCKED and continue.")
+        rules = ("- Commands you may run, exactly as written: "
+                 + ("; ".join(f"`{c}`" for c in _job_commands(m)) or "none")
+                 + ". Read-only ls/cat/grep/git status|diff|log are also fine.\n")
+        if m.get("protect"):
+            rules += "- Never edit these (the checks depend on them): " + ", ".join(m["protect"]) + "\n"
+    else:
+        deny = ("A command that is not on the allow-list ends your WHOLE run and throws away the report, "
+                "even when all the work is done.")
+        rules = ("- Never call an MCP tool unless the LENT section below lends you that server; any other MCP call\n"
+                 "  is denied and ends your run.\n"
+                 "- A subagent may only read and research for you; it never edits files or runs commands. Do the\n"
+                 "  edits yourself.\n")
+    return GUARD.format(files=files, network=net, brief=brief, lent=lent, deny_rule=deny, backend_rules=rules)
+
+
+def _job_commands(m):
+    """What a subagent worker may run: the brief's commands plus the checks (it runs them before saying done)."""
+    return list(dict.fromkeys((m.get("commands") or []) + (m.get("checks") or [])))
+
+
+def _hash(p):
+    """sha1 of a file, or of every file under a folder; None when missing."""
+    p = Path(p)
+    files = sorted(x for x in p.rglob("*") if x.is_file()) if p.is_dir() else [p] if p.is_file() else []
+    if not files:
+        return None
+    h = hashlib.sha1()
+    for f in files:
+        h.update(str(f).encode()); h.update(f.read_bytes())
+    return h.hexdigest()
 
 
 def _skill(item, top):
@@ -140,8 +169,8 @@ def _claude_mcp(name, top):
 
 def _borrow_mcp(m, items):
     """Lend Claude's MCP servers to this job: add them to agy's global list (agy reads it only at
-    startup) and allow `server/*` or one `server/tool`. Released by agy_close / agy_cancel; a job
-    whose process is gone is released at the next agy_start. ponytail: one JSON registry, no lock."""
+    startup) and allow `server/*` or one `server/tool`. Released by delegate_close / delegate_cancel; a job
+    whose process is gone is released at the next delegate_start. ponytail: one JSON registry, no lock."""
     reg_p = JOBS.parent / "borrowed.json"
     reg = json.loads(reg_p.read_text()) if reg_p.exists() else {}
     cfg = json.loads(AGY_MCP.read_text()) if AGY_MCP.exists() else {}
@@ -158,7 +187,7 @@ def _borrow_mcp(m, items):
     AGY_MCP.write_text(json.dumps(cfg, indent=2) + "\n")
     reg_p.parent.mkdir(parents=True, exist_ok=True)
     reg_p.write_text(json.dumps(reg, indent=1))
-    agy_permissions(add=rules)
+    delegate_permissions(add=rules)
     m["borrowed_mcp"], m["borrowed_rules"] = [i.partition("/")[0] for i in items], rules
 
 
@@ -180,7 +209,7 @@ def _release_mcp(m):
     AGY_MCP.write_text(json.dumps(cfg, indent=2) + "\n")
     reg_p.write_text(json.dumps(reg, indent=1))
     still = {r for jid in {j for e in reg.values() for j in e["jobs"]} for r in _load(jid).get("borrowed_rules", [])}
-    agy_permissions(remove=[r for r in m["borrowed_rules"] if r not in still])
+    delegate_permissions(remove=[r for r in m["borrowed_rules"] if r not in still])
     m["borrowed_mcp"] = []
     _save(m)
 
@@ -262,7 +291,7 @@ def _alive(m):
 def _launch(m, prompt, conversation=None):
     """Start an agy session (stream-json in and out; stdin stays open for more messages) and
     send the first message. agy reads its allow-list only at startup, so a session that hit a
-    denial is restarted on the same conversation instead (see agy_resume)."""
+    denial is restarted on the same conversation instead (see delegate_resume)."""
     seg = m.get("seg", 0) + 1
     cmd = [AGY, "--input-format", "stream-json", "--output-format", "stream-json",
            "--mode", "accept-edits", "--model", m["model"]]
@@ -326,8 +355,111 @@ def _is_write(tool):
     return tool in WRITE_TOOLS or bool(re.search(r"write|edit|replace", tool or ""))
 
 
+CLAUDE_PROJECTS = Path.home() / ".claude/projects"
+SUB_EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
+
+
+def _transcript(m):
+    """The worker subagent's transcript: <project>/<session>/subagents/agent-<id>.jsonl whose first line (the
+    prompt delegate_start handed out) names this job. Found once, then cached in the job's meta."""
+    if m.get("transcript") and Path(m["transcript"]).exists():
+        return Path(m["transcript"])
+    tag = f"Job {m['id']}."
+    cands = [(p.stat().st_mtime, p) for p in CLAUDE_PROJECTS.glob("*/*/subagents/agent-*.jsonl")]
+    for mt, p in sorted(cands, reverse=True):
+        if mt < m["created"]:
+            break
+        with open(p, errors="replace") as f:
+            if tag in f.readline():
+                m["transcript"] = str(p)
+                _save(m)
+                return p
+    return None
+
+
+def _ts(iso):
+    return datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp() if iso else 0
+
+
+def _parse_subagent(m):
+    """Same shape as _parse, from a Claude subagent's transcript. Usage repeats on every content-block line of
+    one message, so it is counted once per message id. The report is the SubagentHandback message (or the last
+    text); a denial is a tool_result error, and the guard hook's start with 'delegate:'."""
+    edits, commands, steps, denied = [], [], [], []
+    p = _transcript(m)
+    if p is None:
+        return edits, commands, steps, denied, None
+    seen, pending, by_model = set(), {}, {}
+    final = last_text = first_ts = last_ts = None
+    open_tools = False
+    for line in p.read_text(errors="replace").splitlines():
+        try:
+            d = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        msg, ts = d.get("message") or {}, d.get("timestamp")
+        if ts:
+            first_ts, last_ts = first_ts or ts, ts
+        content = msg.get("content") if isinstance(msg.get("content"), list) else []
+        if d.get("type") == "assistant":
+            if msg.get("id") not in seen:
+                seen.add(msg.get("id"))
+                u = msg.get("usage") or {}
+                n = sum(u.get(k) or 0 for k in ("input_tokens", "cache_creation_input_tokens",
+                                                  "cache_read_input_tokens", "output_tokens"))
+                by_model[msg.get("model") or "?"] = by_model.get(msg.get("model") or "?", 0) + n
+                open_tools = False
+            for b in content:
+                if b.get("type") == "tool_use":
+                    inp = b.get("input") or {}
+                    s = {"tool": b.get("name"), "state": "ACTIVE",
+                         "target": inp.get("file_path") or inp.get("notebook_path") or inp.get("command")
+                         or inp.get("pattern") or inp.get("path") or ""}
+                    pending[b.get("id")] = s
+                    steps.append(s)
+                    open_tools = True
+                    if b.get("name") == "SubagentHandback" and _ts(ts) >= m["rounds"][-1]["started"]:
+                        final = inp.get("message") or ""  # an earlier round's handback is not this round's
+                elif b.get("type") == "text" and (b.get("text") or "").strip() \
+                        and _ts(ts) >= m["rounds"][-1]["started"]:
+                    last_text = b["text"]
+        elif d.get("type") == "user":
+            for b in content:
+                s = pending.pop(b.get("tool_use_id"), None) if b.get("type") == "tool_result" else None
+                if s is None:
+                    continue
+                text = b.get("content")
+                text = text if isinstance(text, str) else json.dumps(text)
+                s["state"] = "ERROR" if b.get("is_error") else "DONE"
+                if b.get("is_error") and re.search(r"delegate:|permission|denied", text, re.I):
+                    denied.append({"action": "command" if s["tool"] == "Bash" else s["tool"],
+                                   "command": s["target"], "reason": text[:200]})
+                    continue
+                if s["tool"] == "Bash":
+                    commands.append(s["target"])
+                elif s["tool"] in SUB_EDIT_TOOLS and s["state"] == "DONE" and s["target"]:
+                    t = os.path.realpath(s["target"])
+                    if t not in edits:
+                        edits.append(t)
+            open_tools = bool(pending)
+    # a text-only last message can also be a mid-run line (blocks are written one per line), so without a
+    # SubagentHandback the run counts as done only once its transcript has been quiet for 30 s
+    done = final is not None or (last_text is not None and not open_tools and not pending
+                                 and time.time() - p.stat().st_mtime > 30)
+    result = None
+    if done:
+        took = (datetime.fromisoformat(last_ts.replace("Z", "+00:00"))
+                - datetime.fromisoformat(first_ts.replace("Z", "+00:00"))).total_seconds() if first_ts else None
+        result = {"status": "SUCCESS", "response": final if final is not None else last_text,
+                  "duration_seconds": took, "_tokens": sum(by_model.values()), "_by_model": by_model,
+                  "_denied_now": False}
+    return edits, commands, steps, denied, result
+
+
 def _parse(m):
     """Fold every round's events into what agy did."""
+    if m.get("backend") == "subagent":
+        return _parse_subagent(m)
     edits, commands, steps, denied = [], [], [], []
     result, conv, seen, tokens = None, m.get("conversation"), {}, {}
     for r in m["rounds"]:
@@ -373,6 +505,10 @@ def _parse(m):
 def _state(m, result):
     if result is not None:
         return "done" if result.get("status") == "SUCCESS" else "failed"
+    if m.get("backend") == "subagent":  # not spawned yet, or still working
+        # ponytail: one quiet window, since a long Bash call writes nothing while it runs; per-tool timing if it misfires
+        p = Path(m["transcript"]) if m.get("transcript") else None
+        return "stalled" if p and time.time() - p.stat().st_mtime > 1800 else "running"
     if _alive(m):
         last = max((JOBS / m["id"]).glob("r*.jsonl"), key=os.path.getmtime)
         quiet = time.time() - os.path.getmtime(last)
@@ -395,21 +531,30 @@ def _allowed(m, path, key="allowed"):
 
 from mcp.server.mcpserver import MCPServer  # noqa: E402  (selftest runs without the server)
 
-mcp = MCPServer("agy-worker", instructions=(
-    "Delegate a mechanical file/code edit to the Antigravity CLI (agy) and audit it. "
-    "agy_start -> agy_wait/agy_status while it works -> agy_diff to audit (scope check, "
-    "denied actions) -> agy_resume for a fix-up round, or agy_discard to revert its files. "
-    "agy edits in place; nothing is committed. agy_permissions maintains agy's command "
-    "allow-list (headless agy silently denies any command not on it)."))
+mcp = MCPServer("delegate", instructions=(
+    "Hand a planned work package to a worker and check it with one verdict. delegate_start snapshots the tree "
+    "and writes the guarded brief; backend='subagent' (default) returns `agent` fields for the Agent tool "
+    "(a delegate:worker subagent on haiku or sonnet), backend='agy' launches the Antigravity CLI. When the "
+    "worker finishes, delegate_verdict runs your checks and reports scope, denials, unattributed and protected "
+    "changes, a sample diff and `clean`. delegate_diff/delegate_discard audit or revert; delegate_resume opens a "
+    "fix-up round. Nothing is committed."))
 
 
 @mcp.tool()
-def agy_start(brief: str, cwd: str, allowed_files: list[str], model: str = DEFAULT_MODEL,
-              timeout_s: int = 3600, network: bool = False, checks: list[str] | None = None,
-              check_timeout_s: int = 600, lend: list[str] | None = None,
-              mcp: list[str] | None = None, handoff: bool = False,
-              outputs: list[str] | None = None) -> dict:
-    """Start agy on a work package (several related tasks), in place in `cwd` (absolute path). `brief` says the
+def delegate_start(brief: str, cwd: str, allowed_files: list[str], backend: str = "subagent",
+                   model: str | None = None, checks: list[str] | None = None, commands: list[str] | None = None,
+                   protect: list[str] | None = None, outputs: list[str] | None = None,
+                   lend: list[str] | None = None, timeout_s: int = 3600, network: bool = False,
+                   check_timeout_s: int = 600, mcp: list[str] | None = None, handoff: bool = False) -> dict:
+    """Start a worker on a work package (several related tasks), in place in `cwd` (absolute path).
+    backend="subagent" (default): a Claude Code subagent does the work. Nothing is launched here: the job is
+    snapshotted, the guarded brief is written to a file, and you get `agent` — pass its fields to the Agent tool
+    (subagent_type, model "haiku"|"sonnet", prompt, run_in_background) — then call delegate_verdict(job) when
+    the worker's completion notice arrives. `commands`: the exact command lines the worker may run (the checks
+    are added); the plugin's guard hook allows those, denies other commands and edits outside allowed_files or
+    on `protect` paths (files the checks depend on; their hashes go in the verdict). backend="agy": the
+    Antigravity CLI does the work (model default gemini-3.8-flash-medium; the agy-only parameters below apply).
+    `brief` says the
     exact change, what done means, and which checks to run. `allowed_files` are the only
     paths agy may edit (absolute, or relative to cwd; a directory or a glob also works).
     The brief is wrapped in a guard preamble. network=True lets a research job browse and
@@ -419,14 +564,17 @@ def agy_start(brief: str, cwd: str, allowed_files: list[str], model: str = DEFAU
     agy runs bare: it gets no skills or MCP servers of its own. `lend` lends skills or instruction
     files for this job (Claude skill names, `plugin:skill`, or paths; default ["ponytail"], pass []
     for none); they are inlined into the brief. `mcp` lends Claude's MCP servers ("server" for all its
-    tools, "server/tool" for one), enabled for this job only and released by agy_close/agy_cancel.
+    tools, "server/tool" for one), enabled for this job only and released by delegate_close/delegate_cancel.
     Returns {job, git, wait_cmd, watch_cmd} immediately: run wait_cmd as a background shell task and
     read the verdict it prints. `handoff=True`: the owner audits, not you — give them watch_cmd (a
     live view that ends with the checks and the verdict) and end your turn; the agy session ends by
-    itself after this round (agy_resume restarts it on the same conversation). `outputs`: files, folders
+    itself after this round (delegate_resume restarts it on the same conversation). `outputs`: files, folders
     or globs the brief's commands write (a renderer's timeline, a log, a mix); they are not flagged as
     unattributed or out of scope, and agy is told not to edit them with its file tools."""
     cwd = os.path.realpath(os.path.expanduser(cwd))
+    if backend not in ("subagent", "agy"):
+        return {"error": f"backend must be 'subagent' or 'agy', not {backend!r}"}
+    model = model or (DEFAULT_MODEL if backend == "agy" else "haiku")
     if not os.path.isdir(cwd):
         return {"error": f"cwd {cwd} is not a directory"}
     if not allowed_files:
@@ -438,11 +586,16 @@ def agy_start(brief: str, cwd: str, allowed_files: list[str], model: str = DEFAU
          "allowed": [os.path.realpath(a) for a in allowed], "model": model,
          "timeout_s": timeout_s, "brief": brief, "network": network, "rounds": [], "created": time.time(),
          "checks": checks or [], "check_timeout_s": check_timeout_s,
-         "outputs": [os.path.realpath(o if os.path.isabs(o) else os.path.join(cwd, o)) for o in outputs or []]}
+         "outputs": [os.path.realpath(o if os.path.isabs(o) else os.path.join(cwd, o)) for o in outputs or []],
+         "backend": backend, "commands": commands or [],
+         "protect": [os.path.realpath(o if os.path.isabs(o) else os.path.join(cwd, o)) for o in protect or []]}
+    m["protect_hash"] = {p: _hash(p) for p in m["protect"]}
     try:
         m["lent_text"] = [_skill(i, m["top"] or cwd) for i in (DEFAULT_LEND if lend is None else lend)]
     except FileNotFoundError as e:
         return {"error": str(e)}
+    if backend == "subagent":
+        return _start_subagent(m, brief, top)
     _gc_borrowed()
     if mcp:
         try:
@@ -453,12 +606,12 @@ def agy_start(brief: str, cwd: str, allowed_files: list[str], model: str = DEFAU
     m["quota_before"] = {f'{p["pool"]} · {p["window"]}': p["left_pct"] for p in pools}
     (JOBS / m["id"]).mkdir(parents=True)
     _launch(m, _guard(m, brief))
-    if handoff:  # nobody will agy_close it: EOF makes agy finish this turn, then exit
+    if handoff:  # nobody will delegate_close it: EOF makes agy finish this turn, then exit
         PROCS.pop(m["id"]).stdin.close()
     out = {"job": m["id"], "git": bool(top), "wait_cmd": _wait_cmd(m["id"]),
            "watch_cmd": _wait_cmd(m["id"]).replace(" wait ", " watch ")}
     if not top:
-        out["warning"] = "not a git repo: agy_diff and agy_discard cannot work for this job"
+        out["warning"] = "not a git repo: delegate_diff and delegate_discard cannot work for this job"
     own = _repo_agy_config(top or cwd)
     if own:
         out["repo_agy_config"] = {"files": own, "note": "agy loads these by itself, so this job is not bare; "
@@ -466,6 +619,26 @@ def agy_start(brief: str, cwd: str, allowed_files: list[str], model: str = DEFAU
     low = [p for p in pools if p["left_pct"] < LOW_PCT]
     if low:
         out["quota_low"] = low
+    return out
+
+
+def _start_subagent(m, brief, top):
+    """Job files for a Claude subagent worker: brief.md (guard + lent skills + brief, so none of it enters the
+    orchestrator's context) and guard.json (what the plugin's guard hook enforces)."""
+    d = JOBS / m["id"]
+    d.mkdir(parents=True)
+    (d / "brief.md").write_text(_guard(m, brief))
+    (d / "guard.json").write_text(json.dumps({"allowed": m["allowed"], "outputs": m["outputs"],
+                                              "commands": _job_commands(m), "protect": m["protect"]}, indent=1))
+    m["rounds"] = [{"n": 1, "started": time.time()}]
+    _save(m)
+    out = {"job": m["id"], "git": bool(top),
+           "agent": {"subagent_type": "delegate:worker", "model": m["model"], "description": f"delegate {m['id']}",
+                     "prompt": f"Job {m['id']}. Read {d / 'brief.md'} and do exactly what it says.",
+                     "run_in_background": True},
+           "then": "when the worker's completion notice arrives: delegate_verdict(job)"}
+    if not top:
+        out["warning"] = "not a git repo: delegate_diff and delegate_discard cannot work for this job"
     return out
 
 
@@ -495,12 +668,12 @@ def _verdict(job):
     done, nothing denied, nothing outside allowed_files and every check passed; `not_from_agy_edits`
     is listed apart because other sessions legitimately edit the same tree."""
     m = _load(job)
-    st = agy_status(job)
+    st = delegate_status(job)
     v = {k: st.get(k) for k in ("job", "state", "round", "elapsed_s", "tokens", "quota_drop_pct",
                                 "denied", "edits", "agy_error", "hint", "stderr") if st.get(k) not in (None, [], {})}
     v["report"] = (st.get("report") or "")[:2500] or None
     if m.get("top"):
-        d = agy_diff(job, max_chars=0)
+        d = delegate_diff(job, max_chars=0)
         v.update(out_of_scope=d["out_of_scope"], not_from_agy_edits=d["not_from_agy_edits"],
                  stat=d["stat"].strip().splitlines()[-1:] or ["no changes"])
         # changed inside the package without an agy edit step: another session, or agy running code it
@@ -511,17 +684,54 @@ def _verdict(job):
         changed = [f for f in d["changed"] if f not in d["out_of_scope"] and not _allowed(m, _abs(m, f), "outputs")]
         if changed:  # light quality check for free: one changed file, capped
             pick = changed[len(changed) // 2]  # ponytail: middle file, not random; the first is often trivial
-            v["sample"] = {"file": pick, "diff": agy_diff(job, files=[pick], max_chars=1500)["diff"]}
+            v["sample"] = {"file": pick, "diff": delegate_diff(job, files=[pick], max_chars=1500)["diff"]}
     # run the checks on every finished round: agy can finish its work and then get a 503 (status
     # ERROR), and the checks, not agy's status, decide whether the work is good
+    if m.get("protect_hash"):  # a worker that edits what the checks read can make them pass (benchmark 5)
+        v["protected_changed"] = [_rel(m, p) for p, h in m["protect_hash"].items() if _hash(p) != h]
+    if m.get("backend") == "subagent":
+        v["tokens_by_model"] = st.get("tokens_by_model")
+        v["orchestrator_calls"] = _orchestrator_calls(m)
     checks = _run_checks(m) if st["state"] != "running" else []
     v["checks"] = checks
     v["all_checks_pass"] = all(c["ok"] for c in checks) if checks else None
     finished = st["state"] == "done" or bool(st.get("agy_error") and st.get("report"))
     v["clean"] = (finished and not st.get("denied_now") and not v.get("out_of_scope")
-                  and not v.get("unattributed") and v["all_checks_pass"] is not False)
+                  and not v.get("unattributed") and not v.get("protected_changed") and not v.get("denied")
+                  and v["all_checks_pass"] is not False)
     (JOBS / job / f"verdict-r{st['round']}.json").write_text(json.dumps(v))
     return v
+
+
+def _orchestrator_calls(m):
+    """Assistant calls the orchestrating session made since the job was created (the worker's parent
+    transcript, one count per message id): the cost driver, since each call re-reads the whole context."""
+    p = _transcript(m)
+    parent = p.parent.parent.with_suffix(".jsonl") if p else None
+    if not parent or not parent.exists():
+        return None
+    since, ids = datetime.fromtimestamp(m["created"], timezone.utc), set()
+    for line in parent.read_text(errors="replace").splitlines():
+        try:
+            d = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        ts = d.get("timestamp")
+        if d.get("type") == "assistant" and ts and datetime.fromisoformat(ts.replace("Z", "+00:00")) >= since:
+            ids.add((d.get("message") or {}).get("id"))
+    return len(ids - {None})
+
+
+@mcp.tool()
+def delegate_verdict(job: str) -> dict:
+    """One verdict for a finished round: state, tokens, report, edits, denied, out_of_scope, unattributed,
+    protected_changed, sample (one changed file's diff), each check (run now, once), clean. For a subagent job
+    call it when the worker's completion notice arrives; for an agy job it replaces running wait_cmd when you
+    already know the job finished."""
+    st = delegate_status(job)
+    if st["state"] == "running":
+        return {"job": job, "state": "running", "hint": "the worker has not finished; call again after its notice"}
+    return _verdict(job)
 
 
 def _parse_usage(text):
@@ -539,7 +749,7 @@ def _parse_usage(text):
 def _usage_pools(model):
     """Quota pools a model draws from. Argon has its own weekly pool; ponytail: assume it
     also draws on the shared Gemini pools until /usage shows otherwise."""
-    pools = agy_usage().get("pools", [])
+    pools = delegate_usage().get("pools", [])
     m = model.lower()
     fam = "argon" if "argon" in m else "claude" if ("claude" in m or "gpt" in m) else "gemini"
     return [p for p in pools if (fam == "argon" and "argon" in p["pool"].lower())
@@ -548,8 +758,8 @@ def _usage_pools(model):
 
 
 @mcp.tool()
-def agy_usage() -> dict:
-    """agy's remaining plan quota per pool (Gemini, Gemini 4 Argon, Claude/GPT) for the
+def delegate_usage() -> dict:
+    """agy backend only. agy's remaining plan quota per pool (Gemini, Gemini 4 Argon, Claude/GPT) for the
     5-hour and weekly windows, with hours until each resets. Free: `/usage` is answered by
     the CLI, no model call. Check before choosing Argon or starting a long package."""
     try:
@@ -597,7 +807,7 @@ def _report(m, text):
 
 
 @mcp.tool()
-def agy_status(job: str | None = None, steps: int = 5, full_report: bool = False) -> dict:
+def delegate_status(job: str | None = None, steps: int = 5, full_report: bool = False) -> dict:
     """One job's progress, compact: state (running|stalled|done|failed|cancelled), elapsed,
     step/edit counts, the last `steps` tool steps as short lines, files edited (relative),
     commands run, denied actions, agy's report (first 2500 chars unless full_report).
@@ -619,12 +829,12 @@ def agy_status(job: str | None = None, steps: int = 5, full_report: bool = False
     ep = JOBS / job / r.get("err", f"r{n}.err")
     err = ep.read_text(errors="replace").strip() if ep.exists() else ""
     state = "cancelled" if m.get("cancelled") else _state(m, result)
-    if state in ("running", "stalled") and time.time() - r["started"] > m["timeout_s"]:
-        agy_cancel(job)  # stream sessions have no --print-timeout, so the server enforces it
+    if m.get("backend") != "subagent" and state in ("running", "stalled") and time.time() - r["started"] > m["timeout_s"]:
+        delegate_cancel(job)  # stream sessions have no --print-timeout, so the server enforces it
         state, err = "cancelled", f"timed out after {m['timeout_s']} s. " + err
     report = _report(m, (result or {}).get("response") or "")
     if not full_report and len(report) > 2500:
-        report = report[:2500] + " …[truncated: agy_status(full_report=True)]"
+        report = report[:2500] + " …[truncated: delegate_status(full_report=True)]"
     done_steps = [x for x in st if x["state"] != "ACTIVE"]
     took = (result or {}).get("duration_seconds")  # cumulative over rounds; wall clock while running
     out = {"job": job, "state": state, "round": n,
@@ -636,6 +846,8 @@ def agy_status(job: str | None = None, steps: int = 5, full_report: bool = False
            "denied": denied, "denied_now": bool((result or {}).get("_denied_now")),
            "agy_error": (result or {}).get("error"), "report": report or None,
            "tokens": (result or {}).get("_tokens"), "session": "open" if _live(m) else "closed"}
+    if m.get("backend") == "subagent":
+        out.update(session="subagent", tokens_by_model=(result or {}).get("_by_model"))
     vf = JOBS / job / f"verdict-r{n}.json"
     if vf.exists() and state != "running":
         out["verdict"] = json.loads(vf.read_text())
@@ -651,28 +863,28 @@ def agy_status(job: str | None = None, steps: int = 5, full_report: bool = False
     if (result or {}).get("_denied_now"):
         # a resume after a denial-ended run wedged (0 tool steps, ~40k output tokens) on 2026-10-19
         out["hint"] = ("This round ended on a denied command (see `denied`), so its edits may be partial "
-                       "and there is no report; audit the diff first. Grant the rule (agy_permissions) or "
-                       "forbid the command, then agy_resume: it restarts agy on the same conversation so "
+                       "and there is no report; audit the diff first. Grant the rule (delegate_permissions) or "
+                       "forbid the command, then delegate_resume: it restarts agy on the same conversation so "
                        "the new rule applies and the context is kept.")
     return out
 
 
 @mcp.tool()
-async def agy_wait(job: str, timeout_s: int = 90) -> dict:
+async def delegate_wait(job: str, timeout_s: int = 90) -> dict:
     """Block until the job finishes or stalls, or timeout_s (max 540) passes; returns
-    agy_status. Use this instead of polling agy_status in a loop."""
+    delegate_status. Use this instead of polling delegate_status in a loop."""
     import anyio
     end = time.time() + min(timeout_s, 540)
     while time.time() < end:
-        s = agy_status(job)
+        s = delegate_status(job)
         if s["state"] not in ("running",):
             return s
         await anyio.sleep(3)
-    return agy_status(job)
+    return delegate_status(job)
 
 
 @mcp.tool()
-def agy_diff(job: str, files: list[str] | None = None, max_chars: int = 6000) -> dict:
+def delegate_diff(job: str, files: list[str] | None = None, max_chars: int = 6000) -> dict:
     """Audit: files changed since the job's snapshot (relative paths), which are outside
     allowed_files, which changed without an agy edit step (another session, or agy via a
     shell command), denied actions, the --stat, and the unified diff truncated to max_chars.
@@ -697,16 +909,27 @@ def agy_diff(job: str, files: list[str] | None = None, max_chars: int = 6000) ->
 
 
 @mcp.tool()
-def agy_resume(job: str, message: str, checks: list[str] | None = None) -> dict:
+def delegate_resume(job: str, message: str, checks: list[str] | None = None) -> dict:
     """Next message to the job's agy session: a fix-up round or the next package in the same
     context (the guard rules and allowed files are restated). A live session takes it in ~2-3 s;
     after a denial (agy reads rules only at startup) or a server restart, agy is restarted on
     the same conversation, context kept. The diff baseline stays the original snapshot.
-    `checks` replaces the job's checks for this round. Returns wait_cmd, like agy_start."""
+    `checks` replaces the job's checks for this round. Returns wait_cmd, like delegate_start."""
     m = _load(job)
     *_, result = _parse(m)
     if _state(m, result) == "running":
-        return {"error": "job is still running; wait for it or agy_cancel first"}
+        return {"error": "job is still running; wait for it or delegate_cancel first"}
+    if m.get("backend") == "subagent":  # the session holds the worker; the server only opens a new round
+        if checks is not None:
+            m["checks"] = checks
+        n = len(m["rounds"]) + 1
+        m["rounds"].append({"n": n, "started": time.time()})
+        _save(m)
+        (JOBS / job / "guard.json").write_text(json.dumps({"allowed": m["allowed"], "outputs": m["outputs"],
+                                                           "commands": _job_commands(m), "protect": m["protect"]}, indent=1))
+        return {"job": job, "round": n, "send": f"Job {job}, round {n}. {message}",
+                "how": "SendMessage this to the same worker (its id is in the Agent result) while its cache is "
+                       "warm (5 min); then delegate_verdict(job) on its notice"}
     if not m.get("conversation"):
         return {"error": "no conversation id recorded for this job; start a new one"}
     m.pop("cancelled", None)
@@ -723,20 +946,26 @@ def agy_resume(job: str, message: str, checks: list[str] | None = None) -> dict:
 
 
 @mcp.tool()
-def agy_close(job: str) -> dict:
+def delegate_close(job: str) -> dict:
     """End a job's agy session once its package is audited (frees the process). The job's
-    files, diff and discard keep working; agy_resume can still reopen the conversation."""
+    files, diff and discard keep working; delegate_resume can still reopen the conversation."""
     m = _load(job)
+    if m.get("backend") == "subagent":
+        return {"job": job, "session": "subagent", "note": "nothing to close: the subagent ends by itself"}
     _close(m)
     _release_mcp(m)
     return {"job": job, "session": "closed"}
 
 
 @mcp.tool()
-def agy_cancel(job: str) -> dict:
-    """Kill a running job (its whole process group). Edits already made stay; agy_discard
+def delegate_cancel(job: str) -> dict:
+    """Kill a running job (its whole process group). Edits already made stay; delegate_discard
     reverts them."""
     m = _load(job)
+    if m.get("backend") == "subagent":
+        m["cancelled"] = True
+        _save(m)
+        return {"job": job, "state": "cancelled", "note": "stop the subagent itself with TaskStop"}
     if _alive(m):
         os.killpg(m["pid"], signal.SIGTERM)
     PROCS.pop(job, None)
@@ -747,7 +976,7 @@ def agy_cancel(job: str) -> dict:
 
 
 @mcp.tool()
-def agy_discard(job: str, files: list[str] | None = None) -> dict:
+def delegate_discard(job: str, files: list[str] | None = None) -> dict:
     """Put files back to the job's snapshot. Default: only files agy's own edit steps touched
     (so another session's work in the same tree is left alone); pass `files` (absolute) to
     choose. Files agy created are deleted."""
@@ -755,7 +984,7 @@ def agy_discard(job: str, files: list[str] | None = None) -> dict:
     if not m["top"]:
         return {"error": "job is not in a git repo; nothing to restore from"}
     if _alive(m):
-        return {"error": "job is still running; agy_cancel first"}
+        return {"error": "job is still running; delegate_cancel first"}
     top = Path(m["top"])
     edits, *_ = _parse(m)
     restored, removed = [], []
@@ -773,13 +1002,13 @@ def agy_discard(job: str, files: list[str] | None = None) -> dict:
 
 
 @mcp.tool()
-def agy_permissions(add: list[str] | None = None, remove: list[str] | None = None,
+def delegate_permissions(add: list[str] | None = None, remove: list[str] | None = None,
                     check: list[str] | None = None) -> dict:
-    """Read or edit agy's headless allow-list (permissions.allow in its settings.json).
+    """agy backend only. Read or edit agy's headless allow-list (permissions.allow in its settings.json).
     Rules are word prefixes, no globs: `command(git diff)`, `read_url(https://archive.org/)`, or
     `command(regex:npm run (build|lint))`. Keep them narrow: a command not on the list ends agy's
     round. `check`: command lines to test against the list after any add/remove — run it on every
-    command a brief names before agy_start. With add/remove/check the reply is compact (what changed,
+    command a brief names before delegate_start. With add/remove/check the reply is compact (what changed,
     the rule count); call with no arguments to read the whole list."""
     d = json.loads(SETTINGS.read_text()) if SETTINGS.exists() else {}
     allow = d.setdefault("permissions", {}).setdefault("allow", [])
@@ -846,20 +1075,20 @@ def selftest():
         (repo / "a.py").write_text("new\n")
         (repo / "new.py").write_text("x\n")
         (repo / "keep.txt").write_text("other session edit\n")
-        dd = agy_diff("t")
+        dd = delegate_diff("t")
         assert sorted(dd["changed"]) == ["a.py", "keep.txt", "new.py"], dd
         assert dd["out_of_scope"] == ["keep.txt", "new.py"], dd
         assert dd["not_from_agy_edits"] == ["keep.txt"], dd
-        assert "new.py" not in agy_diff("t", files=["a.py"])["diff"]  # file-scoped diff
+        assert "new.py" not in delegate_diff("t", files=["a.py"])["diff"]  # file-scoped diff
         m["outputs"] = [str(repo / "keep.txt")]; _save(m)  # declared output: not out of scope
-        assert agy_diff("t")["out_of_scope"] == ["new.py"]
+        assert delegate_diff("t")["out_of_scope"] == ["new.py"]
         assert "never edit them" in _guard(m, "b") and str(repo / "keep.txt") in _guard(m, "b")
         m.pop("outputs"); _save(m)
         rep = "Rendering X (10%)...\n1. done — plan\n" + "Rendering X (90%)...\n" * 50 + \
               f"1. done — check: pass — ok\nFiles: {repo}/a.py"
         assert _report(m, rep) == "1. done — check: pass — ok\nFiles: a.py", _report(m, rep)
         assert _report(m, "x" * 2000).startswith("…") and len(_report(m, "x" * 2000)) == 1501
-        r = agy_discard("t")
+        r = delegate_discard("t")
         assert (repo / "a.py").read_text() == "old\n" and not (repo / "new.py").exists(), r
         assert (repo / "keep.txt").read_text() == "other session edit\n"  # untouched
         assert _git(repo, "status", "--porcelain").decode().count("\n") == 2  # index untouched
@@ -916,7 +1145,7 @@ def selftest():
     v = _verdict("t_v")
     assert v["state"] == "done" and v["all_checks_pass"] is False and not v["clean"], v
     assert [c["rc"] for c in v["checks"]] == [0, 1] and "boom" in v["checks"][1]["tail"], v
-    assert agy_status("t_v")["verdict"]["all_checks_pass"] is False  # status returns it for the round
+    assert delegate_status("t_v")["verdict"]["all_checks_pass"] is False  # status returns it for the round
     mv["cwd"] = "/nonexistent-dir"; _save(mv)
     assert _run_checks(mv)[0]["rc"] == "error"  # a vanished folder is reported, not raised
     mv["cwd"] = str(JOBS.parent); mv["checks"] = ["true"]; _save(mv)
@@ -960,11 +1189,11 @@ def selftest():
         _release_mcp(jb)
         assert "loc" not in json.loads(AGY_MCP.read_text())["mcpServers"]
         assert "mcp(loc/*)" not in json.loads(SETTINGS.read_text())["permissions"]["allow"]
-        p = agy_permissions(add=["command(ls )", "command(ls )"], check=["ls -l", "rm x"])
+        p = delegate_permissions(add=["command(ls )", "command(ls )"], check=["ls -l", "rm x"])
         assert p["added"] == ["command(ls )"] and "allow" not in p, p
         assert p["check"][0] == {"command": "ls -l", "allowed": True} and p["check"][1]["missing"] == ["rm x"], p
-        assert agy_permissions(remove=["command(ls )"])["removed"] == ["command(ls )"]
-        assert "allow" in agy_permissions()
+        assert delegate_permissions(remove=["command(ls )"])["removed"] == ["command(ls )"]
+        assert "allow" in delegate_permissions()
     finally:
         CLAUDE_JSON, AGY_MCP, SETTINGS = saved
     # setup on a fake home: dry run touches nothing; --apply archives, empties, keeps rules; restore.sh undoes it
@@ -991,7 +1220,84 @@ def selftest():
          "python3 b.py --only=g07", "python3 b.py --only=g"], allow)}
     assert c == {"grep -n x f": True, "grep x f | awk '{print}'": False, "npm run lint": True,
                  "npm run test": False, "python3 b.py --only=g07": False, "python3 b.py --only=g": True}, c
+    _selftest_subagent()
     print("selftest ok")
+
+
+def _selftest_subagent():
+    """Subagent backend on a temp repo: job files, transcript parse (usage once per message id, a guard
+    denial, the handback as report), verdict fields, and the guard hook's decisions."""
+    global JOBS, CLAUDE_PROJECTS
+    from datetime import timedelta
+    saved = JOBS, CLAUDE_PROJECTS
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(os.path.realpath(d))
+        JOBS, CLAUDE_PROJECTS = d / "jobs", d / "projects"
+        repo = d / "r"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        (repo / "a.py").write_text("old\n")
+        (repo / "test_a.py").write_text("assert True\n")
+        try:
+            out = delegate_start("Change old to new in a.py.", str(repo), ["a.py"], checks=["true"],
+                                 commands=["python3 a.py"], protect=["test_a.py"], lend=[])
+            job = out["job"]
+            assert out["agent"]["subagent_type"] == "delegate:worker" and out["agent"]["model"] == "haiku", out
+            assert f"Job {job}." in out["agent"]["prompt"]
+            brief = (JOBS / job / "brief.md").read_text()
+            assert "`python3 a.py`; `true`" in brief and "test_a.py" in brief and "allow-list ends" not in brief
+            g = json.loads((JOBS / job / "guard.json").read_text())
+            assert g["commands"] == ["python3 a.py", "true"] and g["protect"] == [str(repo / "test_a.py")], g
+            assert delegate_status(job)["state"] == "running"  # not spawned yet
+            # the worker's transcript, shaped as Claude Code writes it (usage repeated per content block)
+            sess = CLAUDE_PROJECTS / "p" / "s1"
+            (sess / "subagents").mkdir(parents=True)
+            now = datetime.now(timezone.utc).replace(microsecond=0)
+            ts = lambda k: (now + timedelta(seconds=k)).isoformat()
+            u = {"input_tokens": 2, "cache_creation_input_tokens": 100, "cache_read_input_tokens": 0, "output_tokens": 8}
+            A = lambda mid, blocks, k: {"type": "assistant", "timestamp": ts(k), "message": {
+                "id": mid, "model": "claude-haiku-5-5", "usage": u, "content": blocks}}
+            R = lambda tid, text, k, err=False: {"type": "user", "timestamp": ts(k), "message": {"content": [
+                {"type": "tool_result", "tool_use_id": tid, "content": text, "is_error": err}]}}
+            T = lambda tid, name, inp: {"type": "tool_use", "id": tid, "name": name, "input": inp}
+            lines = [{"type": "user", "timestamp": ts(1), "message": {"content": out["agent"]["prompt"]}},
+                     A("m1", [T("t1", "Edit", {"file_path": str(repo / "a.py")})], 2), R("t1", "ok", 3),
+                     A("m2", [T("t2", "Bash", {"command": "rm -rf x"})], 4),
+                     A("m2", [T("t3", "Bash", {"command": "python3 a.py"})], 4),  # same message, 2nd block
+                     R("t2", "delegate: `rm -rf x` is not one of this job's commands", 5, True), R("t3", "", 5),
+                     A("m3", [T("t4", "SubagentHandback", {"message": "1. done — check: pass — ok\nFiles: a.py"})], 6)]
+            (sess / "subagents" / "agent-x1.jsonl").write_text("".join(json.dumps(x) + "\n" for x in lines))
+            sess.with_suffix(".jsonl").write_text("".join(json.dumps(
+                {"type": "assistant", "timestamp": ts(k), "message": {"id": f"o{k // 2}"}}) + "\n" for k in range(1, 7)))
+            (repo / "a.py").write_text("new\n")
+            edits, cmds, steps, den, res = _parse(_load(job))
+            assert edits == [str(repo / "a.py")] and cmds == ["python3 a.py"], (edits, cmds)
+            assert len(den) == 1 and den[0]["command"] == "rm -rf x", den
+            assert res["_tokens"] == 3 * 110 and res["_by_model"] == {"claude-haiku-5-5": 330}, res
+            v = delegate_verdict(job)
+            assert v["state"] == "done" and v["report"].startswith("1. done") and v["all_checks_pass"], v
+            assert v["unattributed"] == [] and v["protected_changed"] == [] and v["orchestrator_calls"] == 4, v
+            assert v["clean"] is False and v["denied"], v  # a denial is worth a look even when the checks pass
+            (repo / "test_a.py").write_text("assert 1\n")
+            assert delegate_verdict(job)["protected_changed"] == ["test_a.py"]
+            r2 = delegate_resume(job, "Fix it.")
+            m2 = _load(job); m2["rounds"][-1]["started"] = (now + timedelta(seconds=10)).timestamp(); _save(m2)
+            assert r2["round"] == 2 and delegate_status(job)["state"] == "running", r2  # round 1's handback is old
+            # the hook, on the same job
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            import guard_hook
+            base = {"agent_type": "delegate:worker", "agent_id": "x1", "transcript_path": str(sess.with_suffix(".jsonl"))}
+            dec = lambda tool, **ti: (guard_hook.decide({**base, "tool_name": tool, "tool_input": ti}, JOBS) or (None,))[0]
+            assert dec("Edit", file_path=str(repo / "a.py")) == "allow"
+            assert dec("Write", file_path=str(repo / "b.py")) == "deny"
+            assert dec("Edit", file_path=str(repo / "test_a.py")) == "deny"
+            assert dec("Bash", command="python3 a.py") == "allow" and dec("Bash", command="git status") == "allow"
+            assert dec("Bash", command="python3 b.py") == "deny" and dec("Bash", command="cat a | sh") == "deny"
+            assert dec("Read", file_path="/etc/hosts") is None
+            assert guard_hook.decide({**base, "agent_type": "Explore", "tool_name": "Bash",
+                                      "tool_input": {"command": "rm x"}}, JOBS) is None  # other agents: no opinion
+        finally:
+            JOBS, CLAUDE_PROJECTS = saved
 
 
 def wait_cli(job, max_s=7200):
@@ -999,10 +1305,10 @@ def wait_cli(job, max_s=7200):
     then print one compact verdict as JSON. Run it as a background shell task so the
     orchestrator is woken once, with everything it needs to audit. ponytail: 15 s poll."""
     m, end = _load(job), time.time() + max_s
-    while time.time() < end and agy_status(job)["state"] == "running":
+    while time.time() < end and delegate_status(job)["state"] == "running":
         stray = [e for e in _parse(m)[0] if not _allowed(m, e)]
         if stray:  # wake the orchestrator early: agy is editing outside its package
-            print(json.dumps({**agy_status(job), "alert": "edits outside allowed_files",
+            print(json.dumps({**delegate_status(job), "alert": "edits outside allowed_files",
                               "stray": [_rel(m, e) for e in stray]}, indent=1))
             return
         time.sleep(15)
@@ -1126,7 +1432,7 @@ def watch_cli(job=None):
     shown, live = 0, False
     with con.status("starting…", spinner="dots") as spin:
         while True:
-            m = _load(job)  # agy_resume adds rounds
+            m = _load(job)  # delegate_resume adds rounds
             edits, _, st, _, result = _parse(m)
             done = [x for x in st if x["state"] != "ACTIVE"]
             for x in done[shown:]:
@@ -1144,7 +1450,7 @@ def watch_cli(job=None):
             spin.update(Text.assemble((f"{stamp()}  ", "dim"), (f"{len(done)} steps · {len(edits)} edits", "bold"),
                                       f"  ·  now: {now['tool']} {_short(m, now['target'])}" if now else "  ·  thinking…"))
             time.sleep(1)
-    s = agy_status(job, full_report=True)
+    s = delegate_status(job, full_report=True)
     color = {"done": "green", "failed": "red", "stalled": "yellow"}.get(state, "white")
     facts = Text.assemble((f"{state.upper()}", f"bold {color}"),
                           f"  ·  round {s['round']}  ·  {s['elapsed_s']} s  ·  {s['n_steps']} steps"
@@ -1169,7 +1475,7 @@ if __name__ == "__main__":
     if sys.argv[1:] == ["selftest"]:
         selftest()
     elif sys.argv[1:] == ["usage"]:
-        print(json.dumps(agy_usage(), indent=1))
+        print(json.dumps(delegate_usage(), indent=1))
     elif sys.argv[1:2] == ["watch"]:
         try:
             watch_cli(sys.argv[2] if len(sys.argv) > 2 else None)
