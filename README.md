@@ -6,7 +6,7 @@
 
 A Claude Code plugin that cuts a job into clusters and hands each one to the cheapest worker that will finish it — a Claude Code subagent on **Haiku** or **Sonnet**, or the **Antigravity CLI** (`agy`, Gemini) — then checks every change with a snapshot, a guard and your own machine checks.
 
-![version](https://img.shields.io/badge/version-0.6.0-blue) [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE) ![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-D97757?logo=anthropic&logoColor=white) ![workers](https://img.shields.io/badge/workers-Haiku_·_Sonnet_·_agy-4285F4) ![MCP](https://img.shields.io/badge/MCP-server-8A2BE2) ![python](https://img.shields.io/badge/python-3.10%2B_·_uv-3776AB?logo=python&logoColor=white) ![platform](https://img.shields.io/badge/tested_on-macOS-lightgrey?logo=apple)
+![version](https://img.shields.io/badge/version-0.6.1-blue) [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE) ![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-D97757?logo=anthropic&logoColor=white) ![workers](https://img.shields.io/badge/workers-Haiku_·_Sonnet_·_agy-4285F4) ![MCP](https://img.shields.io/badge/MCP-server-8A2BE2) ![python](https://img.shields.io/badge/python-3.10%2B_·_uv-3776AB?logo=python&logoColor=white) ![platform](https://img.shields.io/badge/tested_on-macOS-lightgrey?logo=apple)
 
 **📖 New here? Read [the journey](JOURNEY.md)** — why we built this, what broke, and what the benchmarks really showed.
 
@@ -154,7 +154,7 @@ Per fresh run, agy **still costs** Claude tokens: the setup outweighs the job, a
 
 ## 🧭 Status and next steps
 
-**v0.6.0** adds Claude Code subagent workers and makes them the default. The agy benchmarks above showed that the worker's price was never the issue: the orchestrator's calls were. So 0.6 keeps Claude's side to a handful of calls (a brief, a spawn, a verdict) and moves the reading and editing into a worker with its own small context, on the cheapest model that finishes. The subagent backend has passed the self-test (a live run is the next check), not a benchmark; the `--usage` log is how real misses (a cluster re-tagged from Haiku to Sonnet) feed back into the tiering rules.
+**v0.6.0** adds Claude Code subagent workers and makes them the default. The agy benchmarks above showed that the worker's price was never the issue: the orchestrator's calls were. So 0.6 keeps Claude's side to a handful of calls (a brief, a spawn, a verdict) and moves the reading and editing into a worker with its own small context, on the cheapest model that finishes. The subagent backend has passed the self-test and a first live run on Haiku (v0.6.1): a one-line edit came back with the right diff; a worker told to create an unlisted file and edit a protected one got both refused by the guard hook, carried on and was reported unclean; the worker's spawn wrote 6.2k cache tokens. That run also found the two fixes in 0.6.1: commands now `cd` into the job's folder (a subagent's shell starts in the session's), and a report with a failed, skipped or blocked task is never clean. It is not a benchmark; the `--usage` log is how real misses (a cluster re-tagged from Haiku to Sonnet) feed back into the tiering rules.
 
 agy stays useful for:
 

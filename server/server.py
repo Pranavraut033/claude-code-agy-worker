@@ -92,7 +92,8 @@ def _guard(m, brief):
     if m.get("backend") == "subagent":
         deny = ("A command that is not listed is denied; never look for a workaround (another command, a "
                 "script, a file another command runs): mark that task BLOCKED and continue.")
-        rules = ("- Commands you may run, exactly as written: "
+        rules = ("- Your shell starts outside the job's folder; each command below cds into it first.\n"
+                 "- Commands you may run, exactly as written: "
                  + ("; ".join(f"`{c}`" for c in _job_commands(m)) or "none")
                  + ". Read-only ls/cat/grep/git status|diff|log are also fine.\n")
         if m.get("protect"):
@@ -108,8 +109,10 @@ def _guard(m, brief):
 
 
 def _job_commands(m):
-    """What a subagent worker may run: the brief's commands plus the checks (it runs them before saying done)."""
-    return list(dict.fromkeys((m.get("commands") or []) + (m.get("checks") or [])))
+    """What a subagent worker may run: the brief's commands plus the checks (it runs them before saying done).
+    Each starts with a cd into the job's cwd: a subagent's shell starts in the session's folder, not the job's."""
+    cd = f"cd {shlex.quote(m['cwd'])} && "
+    return [cd + c for c in dict.fromkeys((m.get("commands") or []) + (m.get("checks") or []))]
 
 
 def _hash(p):
@@ -696,7 +699,10 @@ def _verdict(job):
     v["checks"] = checks
     v["all_checks_pass"] = all(c["ok"] for c in checks) if checks else None
     finished = st["state"] == "done" or bool(st.get("agy_error") and st.get("report"))
-    v["clean"] = (finished and not st.get("denied_now") and not v.get("out_of_scope")
+    # the worker's own report: passing checks don't cover a task it failed, skipped or was blocked on
+    v["not_done"] = [ln.strip()[:120] for ln in (v.get("report") or "").splitlines()
+                     if re.match(r"\s*\d+\.\s*(failed|skipped|blocked)\b", ln, re.I)]
+    v["clean"] = (finished and not v["not_done"] and not st.get("denied_now") and not v.get("out_of_scope")
                   and not v.get("unattributed") and not v.get("protected_changed") and not v.get("denied")
                   and v["all_checks_pass"] is not False)
     (JOBS / job / f"verdict-r{st['round']}.json").write_text(json.dumps(v))
@@ -1245,9 +1251,10 @@ def _selftest_subagent():
             assert out["agent"]["subagent_type"] == "delegate:worker" and out["agent"]["model"] == "haiku", out
             assert f"Job {job}." in out["agent"]["prompt"]
             brief = (JOBS / job / "brief.md").read_text()
-            assert "`python3 a.py`; `true`" in brief and "test_a.py" in brief and "allow-list ends" not in brief
+            cd = f"cd {shlex.quote(_load(job)['cwd'])} && "
+            assert f"`{cd}python3 a.py`; `{cd}true`" in brief and "test_a.py" in brief and "allow-list ends" not in brief
             g = json.loads((JOBS / job / "guard.json").read_text())
-            assert g["commands"] == ["python3 a.py", "true"] and g["protect"] == [str(repo / "test_a.py")], g
+            assert g["commands"] == [cd + "python3 a.py", cd + "true"] and g["protect"] == [str(repo / "test_a.py")], g
             assert delegate_status(job)["state"] == "running"  # not spawned yet
             # the worker's transcript, shaped as Claude Code writes it (usage repeated per content block)
             sess = CLAUDE_PROJECTS / "p" / "s1"
@@ -1263,7 +1270,7 @@ def _selftest_subagent():
             lines = [{"type": "user", "timestamp": ts(1), "message": {"content": out["agent"]["prompt"]}},
                      A("m1", [T("t1", "Edit", {"file_path": str(repo / "a.py")})], 2), R("t1", "ok", 3),
                      A("m2", [T("t2", "Bash", {"command": "rm -rf x"})], 4),
-                     A("m2", [T("t3", "Bash", {"command": "python3 a.py"})], 4),  # same message, 2nd block
+                     A("m2", [T("t3", "Bash", {"command": cd + "python3 a.py"})], 4),  # same message, 2nd block
                      R("t2", "delegate: `rm -rf x` is not one of this job's commands", 5, True), R("t3", "", 5),
                      A("m3", [T("t4", "SubagentHandback", {"message": "1. done — check: pass — ok\nFiles: a.py"})], 6)]
             (sess / "subagents" / "agent-x1.jsonl").write_text("".join(json.dumps(x) + "\n" for x in lines))
@@ -1271,13 +1278,14 @@ def _selftest_subagent():
                 {"type": "assistant", "timestamp": ts(k), "message": {"id": f"o{k // 2}"}}) + "\n" for k in range(1, 7)))
             (repo / "a.py").write_text("new\n")
             edits, cmds, steps, den, res = _parse(_load(job))
-            assert edits == [str(repo / "a.py")] and cmds == ["python3 a.py"], (edits, cmds)
+            assert edits == [str(repo / "a.py")] and cmds == [cd + "python3 a.py"], (edits, cmds)
             assert len(den) == 1 and den[0]["command"] == "rm -rf x", den
             assert res["_tokens"] == 3 * 110 and res["_by_model"] == {"claude-haiku-5-5": 330}, res
             v = delegate_verdict(job)
             assert v["state"] == "done" and v["report"].startswith("1. done") and v["all_checks_pass"], v
             assert v["unattributed"] == [] and v["protected_changed"] == [] and v["orchestrator_calls"] == 4, v
             assert v["clean"] is False and v["denied"], v  # a denial is worth a look even when the checks pass
+            assert v["not_done"] == [], v
             (repo / "test_a.py").write_text("assert 1\n")
             assert delegate_verdict(job)["protected_changed"] == ["test_a.py"]
             r2 = delegate_resume(job, "Fix it.")
@@ -1291,7 +1299,7 @@ def _selftest_subagent():
             assert dec("Edit", file_path=str(repo / "a.py")) == "allow"
             assert dec("Write", file_path=str(repo / "b.py")) == "deny"
             assert dec("Edit", file_path=str(repo / "test_a.py")) == "deny"
-            assert dec("Bash", command="python3 a.py") == "allow" and dec("Bash", command="git status") == "allow"
+            assert dec("Bash", command=cd + "python3 a.py") == "allow" and dec("Bash", command="git status") == "allow"
             assert dec("Bash", command="python3 b.py") == "deny" and dec("Bash", command="cat a | sh") == "deny"
             assert dec("Read", file_path="/etc/hosts") is None
             assert guard_hook.decide({**base, "agent_type": "Explore", "tool_name": "Bash",
