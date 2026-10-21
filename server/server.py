@@ -60,6 +60,10 @@ moving on. Follow these rules exactly:
   conftest, a config): that is running an unlisted program. Edit each file with your file tools.
 - Run every command in the foreground and wait for it to finish; never leave background tasks.
 - Do not read outside the repository (library sources, virtualenvs, caches) unless asked to.
+- Stay on the task: read only files the task names or its result depends on; no surveying folders or
+  comparing sibling files. If a command fails, take the shortest path to the result (the source it
+  summarises, another input) and note the failure in one line; diagnose a tool only if fixing it is the task.
+  Anything odd outside the task gets one line in the report, not a fix or an investigation.
 - At most 2 attempts per defect: if a fix does not hold after 2 tries, stop, mark it failed with
   your best guess at the root cause, and move on.
 - Say "done" only after re-running that task's check and seeing it pass. You cannot judge visual

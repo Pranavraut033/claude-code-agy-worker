@@ -1,6 +1,6 @@
 {
   "name": "agy-worker",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "description": "Claude Code orchestrates and audits; the Antigravity CLI (agy) does the mechanical work in long multi-task work packages. MCP server + /agy skill.",
   "author": {
     "name": "Pranav Raut"
