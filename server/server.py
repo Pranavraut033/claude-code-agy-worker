@@ -632,7 +632,7 @@ def _start_subagent(m, brief, top):
     d.mkdir(parents=True)
     (d / "brief.md").write_text(_guard(m, brief))
     (d / "guard.json").write_text(json.dumps({"allowed": m["allowed"], "outputs": m["outputs"],
-                                              "commands": _job_commands(m), "protect": m["protect"]}, indent=1))
+                                              "commands": _job_commands(m), "protect": m["protect"], "cwd": m["cwd"]}, indent=1))
     m["rounds"] = [{"n": 1, "started": time.time()}]
     _save(m)
     out = {"job": m["id"], "git": bool(top),
@@ -932,7 +932,7 @@ def delegate_resume(job: str, message: str, checks: list[str] | None = None) -> 
         m["rounds"].append({"n": n, "started": time.time()})
         _save(m)
         (JOBS / job / "guard.json").write_text(json.dumps({"allowed": m["allowed"], "outputs": m["outputs"],
-                                                           "commands": _job_commands(m), "protect": m["protect"]}, indent=1))
+                                                           "commands": _job_commands(m), "protect": m["protect"], "cwd": m["cwd"]}, indent=1))
         return {"job": job, "round": n, "send": f"Job {job}, round {n}. {message}",
                 "how": "SendMessage this to the same worker (its id is in the Agent result) while its cache is "
                        "warm (5 min); then delegate_verdict(job) on its notice"}
@@ -1302,6 +1302,17 @@ def _selftest_subagent():
             assert dec("Bash", command=cd + "python3 a.py") == "allow" and dec("Bash", command="git status") == "allow"
             assert dec("Bash", command="python3 b.py") == "deny" and dec("Bash", command="cat a | sh") == "deny"
             assert dec("Read", file_path="/etc/hosts") is None
+            # live 2026-10-21: Claude Code strips `cd <its folder> &&` before the hook sees the command, so the
+            # bare line must pass when the shell is in the job's folder, and not when it is elsewhere
+            live = lambda cmd, cwd: (guard_hook.decide({**base, "tool_name": "Bash", "cwd": cwd,
+                                                        "tool_input": {"command": cmd}}, JOBS) or (None,))[0]
+            assert live("python3 a.py", str(repo)) == "allow"
+            assert live("python3 a.py", "/tmp") == "deny"
+            assert live(f"cd {repo} && python3 a.py", "/tmp") == "allow"
+            assert live("grep -n \"^def a\\|^def b\" a.py", "/tmp") == "allow"  # quoted \| is not a pipe
+            assert live("ls a; ls b", "/tmp") == "allow" and live("grep x a | head -3", "/tmp") == "allow"
+            assert live("cat a > b", "/tmp") == "deny" and live("ls; rm -rf x", "/tmp") == "deny"
+            assert live("cat $(echo a)", "/tmp") == "deny"
             assert guard_hook.decide({**base, "agent_type": "Explore", "tool_name": "Bash",
                                       "tool_input": {"command": "rm x"}}, JOBS) is None  # other agents: no opinion
         finally:

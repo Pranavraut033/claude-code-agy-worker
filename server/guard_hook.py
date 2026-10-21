@@ -7,20 +7,68 @@ is in the worker's first message, which delegate_start wrote) and enforces the j
     (the commands write those) and on protected paths (what the checks read);
   - Bash: allowed when it is exactly one of the job's commands or a plain read-only command; denied otherwise.
 A deny goes back to the worker as the tool's error (the run continues); reasons start with "delegate:" so the
-server can count them. ponytail: exact string match for commands, no shell parsing.
+server can count them. ponytail: listed commands match exactly (after their leading cd), reads are parsed with
+shlex; no full shell grammar.
 """
-import fnmatch, json, os, re, sys
+import fnmatch, json, os, re, shlex, sys
 from pathlib import Path
 
 JOBS = Path(os.environ.get("DELEGATE_HOME") or Path.home() / ".local/state/delegate") / "jobs"
 EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
-READ_ONLY = re.compile(r"(ls|cat|head|tail|wc|grep|rg|git (status|diff|log|show))(\s[^|;&<>`$()]*)?")
+READ_ONLY = {"ls", "cat", "head", "tail", "wc", "grep", "rg"}
+READ_ONLY_GIT = {"status", "diff", "log", "show"}
+CD_RE = re.compile(r"^cd\s+('[^']*'|\"[^\"]*\"|\S+)\s*&&\s*")
 JOB_RE = re.compile(r"Job (\d{4}-\d{6}-[0-9a-f]{4})\.")
 
 
 def _match(paths, p):
     p = os.path.realpath(p)
     return any(p == a or p.startswith(a.rstrip("/") + "/") or fnmatch.fnmatch(p, a) for a in paths)
+
+
+def _split_cd(cmd):
+    """('dir', rest) for `cd <dir> && rest`, else (None, cmd)."""
+    hit = CD_RE.match(cmd)
+    if not hit:
+        return None, cmd
+    return os.path.realpath(shlex.split(hit.group(1))[0]), cmd[hit.end():].strip()
+
+
+def _listed(cmd, g, shell_cwd):
+    """Claude Code strips a leading `cd <its own folder> &&` before the hook sees a command (live, 2.1.306), and a
+    worker that already cd'ed runs the bare line. So compare the commands without their cd, and accept a bare one
+    only when the shell is already in the job's folder."""
+    cd, rest = _split_cd(cmd)
+    where = cd or os.path.realpath(shell_cwd or ".")
+    for c in g["commands"]:
+        ccd, crest = _split_cd(c)
+        if c == cmd or (crest == rest and where == (ccd or g.get("cwd"))):
+            return True
+    return False
+
+
+def _read_only(cmd):
+    """Plain reads, alone or joined by ; && || |, with no redirect, background, subshell or substitution.
+    Quoted operators (grep "a\\|b") are fine: shlex keeps them inside their token."""
+    if "`" in cmd or "$(" in cmd:
+        return False
+    try:
+        lx = shlex.shlex(cmd, posix=True, punctuation_chars=True)
+        lx.whitespace_split = True
+        toks = list(lx)
+    except ValueError:
+        return False
+    segs, cur = [], []
+    for t in toks:
+        if t in (";", "&&", "||", "|"):
+            segs.append(cur); cur = []
+        elif set(t) <= set("();<>|&"):
+            return False  # >, <, &, ( … )
+        else:
+            cur.append(t)
+    segs.append(cur)
+    return all(sg and (sg[0] in READ_ONLY or (sg[0] == "git" and len(sg) > 1 and sg[1] in READ_ONLY_GIT))
+               for sg in segs)
 
 
 def _job_of(inp):
@@ -54,7 +102,7 @@ def decide(inp, jobs=JOBS):
     g = json.loads(g.read_text())
     if tool == "Bash":
         cmd = (ti.get("command") or "").strip()
-        if cmd in g["commands"] or READ_ONLY.fullmatch(cmd):
+        if _listed(cmd, g, inp.get("cwd")) or _read_only(_split_cd(cmd)[1]):
             return "allow", "delegate: listed command"
         return "deny", (f"delegate: `{cmd[:120]}` is not one of this job's commands. Do not work around it "
                         "(no other command, script or file a command runs): mark the task BLOCKED and continue.")
