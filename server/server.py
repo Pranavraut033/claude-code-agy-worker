@@ -90,10 +90,10 @@ def _guard(m, brief):
         files += (". The commands you run also write these; never edit them with your file tools: "
                   + ", ".join(m["outputs"]))
     if m.get("backend") == "subagent":
-        deny = ("A command that is not listed is denied; never look for a workaround (another command, a "
-                "script, a file another command runs): mark that task BLOCKED and continue.")
+        deny = ("If a command is refused, never look for a workaround (another command, a script, a file "
+                "another command runs): mark that task BLOCKED and continue.")
         rules = ("- Your shell starts outside the job's folder; each command below cds into it first.\n"
-                 "- Commands you may run, exactly as written: "
+                 "- Commands to run, exactly as written: "
                  + ("; ".join(f"`{c}`" for c in _job_commands(m)) or "none")
                  + ". Read-only ls/cat/grep/git status|diff|log are also fine.\n")
         if m.get("protect"):
@@ -387,7 +387,7 @@ def _ts(iso):
 def _parse_subagent(m):
     """Same shape as _parse, from a Claude subagent's transcript. Usage repeats on every content-block line of
     one message, so it is counted once per message id. The report is the SubagentHandback message (or the last
-    text); a denial is a tool_result error, and the guard hook's start with 'delegate:'."""
+    text); a denial is a tool_result error about permission."""
     edits, commands, steps, denied = [], [], [], []
     p = _transcript(m)
     if p is None:
@@ -434,7 +434,7 @@ def _parse_subagent(m):
                 text = b.get("content")
                 text = text if isinstance(text, str) else json.dumps(text)
                 s["state"] = "ERROR" if b.get("is_error") else "DONE"
-                if b.get("is_error") and re.search(r"delegate:|permission|denied", text, re.I):
+                if b.get("is_error") and re.search(r"permission|denied", text, re.I):
                     denied.append({"action": "command" if s["tool"] == "Bash" else s["tool"],
                                    "command": s["target"], "reason": text[:200]})
                     continue
@@ -553,9 +553,9 @@ def delegate_start(brief: str, cwd: str, allowed_files: list[str], backend: str 
     backend="subagent" (default): a Claude Code subagent does the work. Nothing is launched here: the job is
     snapshotted, the guarded brief is written to a file, and you get `agent` — pass its fields to the Agent tool
     (subagent_type, model "haiku"|"sonnet", prompt, run_in_background) — then call delegate_verdict(job) when
-    the worker's completion notice arrives. `commands`: the exact command lines the worker may run (the checks
-    are added); the plugin's guard hook allows those, denies other commands and edits outside allowed_files or
-    on `protect` paths (files the checks depend on; their hashes go in the verdict). backend="agy": the
+    the worker's completion notice arrives. The worker runs under the session's own permissions. `commands`:
+    the exact command lines the brief needs (the checks are added); `protect`: files the checks depend on, which
+    the worker is told not to edit and whose hashes go in the verdict (`protected_changed`). backend="agy": the
     Antigravity CLI does the work (model default gemini-3.8-flash-medium; the agy-only parameters below apply).
     `brief` says the
     exact change, what done means, and which checks to run. `allowed_files` are the only
@@ -626,13 +626,12 @@ def delegate_start(brief: str, cwd: str, allowed_files: list[str], backend: str 
 
 
 def _start_subagent(m, brief, top):
-    """Job files for a Claude subagent worker: brief.md (guard + lent skills + brief, so none of it enters the
-    orchestrator's context) and guard.json (what the plugin's guard hook enforces)."""
+    """The job file for a Claude subagent worker: brief.md (guard + lent skills + brief, so none of it enters the
+    orchestrator's context). No permission gate: the worker runs under the session's permissions, and scope and
+    protected files are checked after the run by the verdict."""
     d = JOBS / m["id"]
     d.mkdir(parents=True)
     (d / "brief.md").write_text(_guard(m, brief))
-    (d / "guard.json").write_text(json.dumps({"allowed": m["allowed"], "outputs": m["outputs"],
-                                              "commands": _job_commands(m), "protect": m["protect"], "cwd": m["cwd"]}, indent=1))
     m["rounds"] = [{"n": 1, "started": time.time()}]
     _save(m)
     out = {"job": m["id"], "git": bool(top),
@@ -931,8 +930,6 @@ def delegate_resume(job: str, message: str, checks: list[str] | None = None) -> 
         n = len(m["rounds"]) + 1
         m["rounds"].append({"n": n, "started": time.time()})
         _save(m)
-        (JOBS / job / "guard.json").write_text(json.dumps({"allowed": m["allowed"], "outputs": m["outputs"],
-                                                           "commands": _job_commands(m), "protect": m["protect"], "cwd": m["cwd"]}, indent=1))
         return {"job": job, "round": n, "send": f"Job {job}, round {n}. {message}",
                 "how": "SendMessage this to the same worker (its id is in the Agent result) while its cache is "
                        "warm (5 min); then delegate_verdict(job) on its notice"}
@@ -1232,7 +1229,7 @@ def selftest():
 
 def _selftest_subagent():
     """Subagent backend on a temp repo: job files, transcript parse (usage once per message id, a guard
-    denial, the handback as report), verdict fields, and the guard hook's decisions."""
+    denial, the handback as report) and the verdict fields."""
     global JOBS, CLAUDE_PROJECTS
     from datetime import timedelta
     saved = JOBS, CLAUDE_PROJECTS
@@ -1253,8 +1250,7 @@ def _selftest_subagent():
             brief = (JOBS / job / "brief.md").read_text()
             cd = f"cd {shlex.quote(_load(job)['cwd'])} && "
             assert f"`{cd}python3 a.py`; `{cd}true`" in brief and "test_a.py" in brief and "allow-list ends" not in brief
-            g = json.loads((JOBS / job / "guard.json").read_text())
-            assert g["commands"] == [cd + "python3 a.py", cd + "true"] and g["protect"] == [str(repo / "test_a.py")], g
+            assert not (JOBS / job / "guard.json").exists()  # no permission gate since 0.7.0
             assert delegate_status(job)["state"] == "running"  # not spawned yet
             # the worker's transcript, shaped as Claude Code writes it (usage repeated per content block)
             sess = CLAUDE_PROJECTS / "p" / "s1"
@@ -1271,7 +1267,7 @@ def _selftest_subagent():
                      A("m1", [T("t1", "Edit", {"file_path": str(repo / "a.py")})], 2), R("t1", "ok", 3),
                      A("m2", [T("t2", "Bash", {"command": "rm -rf x"})], 4),
                      A("m2", [T("t3", "Bash", {"command": cd + "python3 a.py"})], 4),  # same message, 2nd block
-                     R("t2", "delegate: `rm -rf x` is not one of this job's commands", 5, True), R("t3", "", 5),
+                     R("t2", "Permission to use Bash with command rm -rf x has been denied.", 5, True), R("t3", "", 5),
                      A("m3", [T("t4", "SubagentHandback", {"message": "1. done — check: pass — ok\nFiles: a.py"})], 6)]
             (sess / "subagents" / "agent-x1.jsonl").write_text("".join(json.dumps(x) + "\n" for x in lines))
             sess.with_suffix(".jsonl").write_text("".join(json.dumps(
@@ -1291,30 +1287,6 @@ def _selftest_subagent():
             r2 = delegate_resume(job, "Fix it.")
             m2 = _load(job); m2["rounds"][-1]["started"] = (now + timedelta(seconds=10)).timestamp(); _save(m2)
             assert r2["round"] == 2 and delegate_status(job)["state"] == "running", r2  # round 1's handback is old
-            # the hook, on the same job
-            sys.path.insert(0, str(Path(__file__).resolve().parent))
-            import guard_hook
-            base = {"agent_type": "delegate:worker", "agent_id": "x1", "transcript_path": str(sess.with_suffix(".jsonl"))}
-            dec = lambda tool, **ti: (guard_hook.decide({**base, "tool_name": tool, "tool_input": ti}, JOBS) or (None,))[0]
-            assert dec("Edit", file_path=str(repo / "a.py")) == "allow"
-            assert dec("Write", file_path=str(repo / "b.py")) == "deny"
-            assert dec("Edit", file_path=str(repo / "test_a.py")) == "deny"
-            assert dec("Bash", command=cd + "python3 a.py") == "allow" and dec("Bash", command="git status") == "allow"
-            assert dec("Bash", command="python3 b.py") == "deny" and dec("Bash", command="cat a | sh") == "deny"
-            assert dec("Read", file_path="/etc/hosts") is None
-            # live 2026-10-21: Claude Code strips `cd <its folder> &&` before the hook sees the command, so the
-            # bare line must pass when the shell is in the job's folder, and not when it is elsewhere
-            live = lambda cmd, cwd: (guard_hook.decide({**base, "tool_name": "Bash", "cwd": cwd,
-                                                        "tool_input": {"command": cmd}}, JOBS) or (None,))[0]
-            assert live("python3 a.py", str(repo)) == "allow"
-            assert live("python3 a.py", "/tmp") == "deny"
-            assert live(f"cd {repo} && python3 a.py", "/tmp") == "allow"
-            assert live("grep -n \"^def a\\|^def b\" a.py", "/tmp") == "allow"  # quoted \| is not a pipe
-            assert live("ls a; ls b", "/tmp") == "allow" and live("grep x a | head -3", "/tmp") == "allow"
-            assert live("cat a > b", "/tmp") == "deny" and live("ls; rm -rf x", "/tmp") == "deny"
-            assert live("cat $(echo a)", "/tmp") == "deny"
-            assert guard_hook.decide({**base, "agent_type": "Explore", "tool_name": "Bash",
-                                      "tool_input": {"command": "rm x"}}, JOBS) is None  # other agents: no opinion
         finally:
             JOBS, CLAUDE_PROJECTS = saved
 

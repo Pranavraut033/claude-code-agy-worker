@@ -83,10 +83,10 @@ commands, stay on task, no code smuggled into files a command runs, report shape
   before the task; derive invariants from the existing artefact, not from memory [ours: a spec error cost 2
   rounds]. The worker may run them too.
 - **`commands`**: every other command line the tasks need, exactly as written (a venv or env var goes in the
-  line: `.venv/bin/python3 tools/x.py`). Subagent jobs: the guard hook allows exactly these plus read-only
-  `ls/cat/grep/git status|diff|log`, and denies the rest as a tool error (the run continues).
-- **`protect`**: files the checks depend on (tests, fixtures, the verifier). The hook refuses edits to them and
-  the verdict reports `protected_changed` [ext: read-only tests are the measured fix for test tampering; ours:
+  line: `.venv/bin/python3 tools/x.py`). Subagent workers run under this session's own permissions (no gate of
+  the plugin's): a command your rules don't allow prompts the user or is refused, so name every one.
+- **`protect`**: files the checks depend on (tests, fixtures, the verifier). The worker is told not to edit them
+  and the verdict hashes them (`protected_changed`, which makes `clean` false) [ext: read-only tests are the measured fix for test tampering; ours:
   a worker once hid a migration script in `__init__.py` and ran it through the allowed test runner].
 - **`outputs`**: files the commands generate (a timeline, a log, a mix), so they don't count as unattributed.
 - **`lend`**: skills or files the job needs, inlined into the brief file (default `["ponytail"]`; `[]` for
@@ -96,8 +96,8 @@ commands, stay on task, no code smuggled into files a command runs, report shape
 
 ## 3. Run it
 
-**Subagent worker (default).** `delegate_start` launches nothing: it snapshots the tree, writes `brief.md` and
-the hook's `guard.json`, and returns `agent`. Pass those fields straight to the Agent tool:
+**Subagent worker (default).** `delegate_start` launches nothing: it snapshots the tree, writes `brief.md`, and
+returns `agent`. Pass those fields straight to the Agent tool:
 `Agent(subagent_type="delegate:worker", model=…, description=…, prompt=…, run_in_background=true)` — never a
 fork (a fork inherits this whole context [ext]). The user watches the worker in the app. End your turn or do
 other work; when its completion notice arrives, call `delegate_verdict(job)`.

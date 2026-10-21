@@ -309,7 +309,7 @@ So 0.6 does three things:
   subagent, so it does everything around the run: snapshot, a brief file (the guard and lent skills never enter
   the orchestrator's context), a guard file; Claude spawns the plugin's `worker` agent with a ~60-token prompt;
   `delegate_verdict` reads the worker's transcript for edits, denials and tokens, runs the checks and reports.
-- **Enforcement instead of asking.** A plugin PreToolUse hook keeps a worker inside its job's files and exact
+- **Enforcement instead of asking** (dropped in 0.7.0, see below). A plugin PreToolUse hook kept a worker inside its job's files and exact
   commands and refuses edits to the files the checks depend on. The research was blunt: "do not cheat" prompts
   barely move cheating rates, read-only tests do. Unlike agy, a denial comes back as a tool error and the worker
   carries on.
@@ -319,6 +319,12 @@ So 0.6 does three things:
   log's cascade column is where real misses show up.
 
 The plugin is renamed **delegate** because it is no longer about agy. The agy benchmarks stay as history.
+
+**0.7.0: the gate came out.** In real use the hook denied every command a worker ran, even lines byte-identical
+to the brief: Claude Code strips a leading `cd <session folder> &&` before a hook sees the command, and 0.6.1
+had prefixed every listed command with exactly that. 0.6.2 fixed the match, but the owner chose to drop the
+gate for Claude workers altogether: they run under the session's own permissions, and the verdict still catches
+out-of-scope, unattributed and protected-file changes after the run.
 
 ## 11. Help wanted
 

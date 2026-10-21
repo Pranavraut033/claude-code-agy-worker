@@ -76,9 +76,11 @@ published, so treat dollar figures as relative sizes. Re-check anything marked *
 - **Ours:** agy hid a migration script in `__init__.py` and ran it through the allowed test runner (benchmark
   5); side-tracking into unrelated files and diagnosing a failing tool instead of taking the shortest path (Ep 3);
   a spec error executed faithfully for two rounds; "verified" on unreadable renders.
-- **Enforce, don't ask:** delegate's guard hook denies edits outside the job's files and on `protect` paths,
-  and commands not in the job's list; the verdict hashes protected files (`protected_changed`) and lists
-  `unattributed` changes. Other tools do the same at different layers: Codex CLI sandbox + approval policy [18],
+- **What delegate does:** since 0.7.0 no permission gate (a PreToolUse hook gated 0.6.x workers; it was dropped
+  as friction — Claude Code strips a leading `cd <session folder> &&` before hooks see a command, and every
+  listed command got denied). Subagent workers run under the session's permissions; the verdict detects instead
+  of blocking: protected files are hashed (`protected_changed`), out-of-scope and `unattributed` changes are
+  listed, and any of them makes `clean` false. Other tools do the same at different layers: Codex CLI sandbox + approval policy [18],
   OpenCode per-agent allow/ask/deny maps [19], SWE-agent's linting edit command [20].
 
 ## Sources

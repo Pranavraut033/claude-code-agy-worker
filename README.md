@@ -6,7 +6,7 @@
 
 A Claude Code plugin that cuts a job into clusters and hands each one to the cheapest worker that will finish it — a Claude Code subagent on **Haiku** or **Sonnet**, or the **Antigravity CLI** (`agy`, Gemini) — then checks every change with a snapshot, a guard and your own machine checks.
 
-![version](https://img.shields.io/badge/version-0.6.2-blue) [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE) ![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-D97757?logo=anthropic&logoColor=white) ![workers](https://img.shields.io/badge/workers-Haiku_·_Sonnet_·_agy-4285F4) ![MCP](https://img.shields.io/badge/MCP-server-8A2BE2) ![python](https://img.shields.io/badge/python-3.10%2B_·_uv-3776AB?logo=python&logoColor=white) ![platform](https://img.shields.io/badge/tested_on-macOS-lightgrey?logo=apple)
+![version](https://img.shields.io/badge/version-0.7.0-blue) [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE) ![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-D97757?logo=anthropic&logoColor=white) ![workers](https://img.shields.io/badge/workers-Haiku_·_Sonnet_·_agy-4285F4) ![MCP](https://img.shields.io/badge/MCP-server-8A2BE2) ![python](https://img.shields.io/badge/python-3.10%2B_·_uv-3776AB?logo=python&logoColor=white) ![platform](https://img.shields.io/badge/tested_on-macOS-lightgrey?logo=apple)
 
 **📖 New here? Read [the journey](JOURNEY.md)** — why we built this, what broke, and what the benchmarks really showed.
 
@@ -25,10 +25,10 @@ sequenceDiagram
     participant S as delegate server
     participant W as worker (Haiku/Sonnet subagent, or agy)
     Claude->>S: delegate_start(brief, allowed_files, checks, commands, protect)
-    S->>S: git snapshot (HEAD & index untouched), brief.md + guard.json
+    S->>S: git snapshot (HEAD & index untouched), brief.md
     S-->>Claude: agent fields (subagent) / wait_cmd (agy)
     Claude->>W: Agent(delegate:worker, model=haiku) — or the server launches agy
-    W->>W: edit files, run checks (guard hook: allowed files and commands only)
+    W->>W: edit files, run checks
     You-->>W: watch it live in the app (or `watch` for agy)
     Claude->>S: delegate_verdict(job)
     S-->>Claude: one verdict: checks, scope, denials, protected/unattributed, diff sample
@@ -40,7 +40,7 @@ sequenceDiagram
 
 - **The orchestrator's turns are the cost, not the worker.** Every Claude call re-reads the whole session; one Sonnet call at a 315k context costs about as much as a whole Haiku worker job. So Claude plans and checks in a few calls, and the reading and editing happen in a worker's own small context.
 - **Cheap model first, escalate on evidence.** Mechanical clusters go to Haiku; a failed check gets one fix-up, then the cluster is re-delegated to Sonnet; Claude does it itself only after that.
-- **Enforced, not just asked.** A plugin hook keeps a worker inside its job's files and commands, and refuses edits to the files the checks depend on. Telling a model not to cheat barely works; read-only tests do (see [the reference](skills/delegate/references/orchestration.md#5-worker-failure-modes-and-guards)).
+- **Checked, not trusted.** The verdict hashes the files the checks depend on and lists any change outside the job's files or made without an edit step; any of them makes `clean` false. Telling a model not to cheat barely works (see [the reference](skills/delegate/references/orchestration.md#5-worker-failure-modes-and-guards)).
 - **In place, with snapshot diff/revert.** No worktree; an independent git snapshot lets you diff and revert exactly what the job changed.
 - **agy when you want Google's quota.** Long unattended runs or a nearly spent Claude limit can go to Gemini instead.
 
@@ -89,7 +89,7 @@ uv run --script ~/.claude/plugins/cache/delegate/delegate/<version>/server/serve
 
 ## 🛡️ Safety
 
-- **Guard hook (subagent workers)**: `hooks/hooks.json` runs `server/guard_hook.py` on every Edit/Write/Bash call and does nothing unless the caller is a `delegate:worker` subagent. For a worker it allows edits inside the job's files and its exact listed commands (plus plain read-only `ls/cat/grep/git status|diff|log`), and denies everything else, edits to `protect` files and hand edits to declared outputs. A denial goes back to the worker as an error; the run continues and the verdict lists it. Workers otherwise inherit your session's permission rules.
+- **No permission gate for subagent workers** (since 0.7.0): they run under your session's permission rules and mode. Scope is checked after the run, not blocked during it: `out_of_scope`, `unattributed` and `protected_changed` in the verdict.
 - **Guard preamble**: every brief limits the worker to `allowed_files` and forbids state-changing git, installs, deletions, improvised commands and code smuggled into files a command runs.
 - **An allowed test command runs any code the worker writes.** `python3 -m unittest` or `pytest` imports test files, `__init__.py` and conftest. In benchmark 5 agy migrated 78 files with a script hidden in `__init__.py`, then removed it. Put the tests and fixtures in `protect=[…]`; the verdict marks changes with no edit step as `unattributed` and hashes protected files (`protected_changed`), and either makes `clean` false.
 - **agy**: runs with `--mode accept-edits`, never `--dangerously-skip-permissions`; its allow-list lives in `~/.gemini/antigravity-cli/settings.json` and is global across projects.
@@ -154,7 +154,7 @@ Per fresh run, agy **still costs** Claude tokens: the setup outweighs the job, a
 
 ## 🧭 Status and next steps
 
-**v0.6.0** adds Claude Code subagent workers and makes them the default. The agy benchmarks above showed that the worker's price was never the issue: the orchestrator's calls were. So 0.6 keeps Claude's side to a handful of calls (a brief, a spawn, a verdict) and moves the reading and editing into a worker with its own small context, on the cheapest model that finishes. The subagent backend has passed the self-test and a first live run on Haiku (v0.6.1): a one-line edit came back with the right diff; a worker told to create an unlisted file and edit a protected one got both refused by the guard hook, carried on and was reported unclean; the worker's spawn wrote 6.2k cache tokens. That run also found the two fixes in 0.6.1: commands now `cd` into the job's folder (a subagent's shell starts in the session's), and a report with a failed, skipped or blocked task is never clean. It is not a benchmark; the `--usage` log is how real misses (a cluster re-tagged from Haiku to Sonnet) feed back into the tiering rules.
+**v0.6.0** adds Claude Code subagent workers and makes them the default. The agy benchmarks above showed that the worker's price was never the issue: the orchestrator's calls were. So 0.6 keeps Claude's side to a handful of calls (a brief, a spawn, a verdict) and moves the reading and editing into a worker with its own small context, on the cheapest model that finishes. The subagent backend has passed the self-test and a first live run on Haiku (v0.6.1): a one-line edit came back with the right diff; a worker told to create an unlisted file and edit a protected one got both refused by the guard hook of the time, carried on and was reported unclean; the worker's spawn wrote 6.2k cache tokens. That run also found the two fixes in 0.6.1: commands now `cd` into the job's folder (a subagent's shell starts in the session's), and a report with a failed, skipped or blocked task is never clean. In real use that hook then denied every command (a `cd` prefix Claude Code strips before hooks run), so **0.7.0 drops the permission gate**: workers run under your session's permissions and the verdict catches scope and protected-file changes after the run. It is not a benchmark; the `--usage` log is how real misses (a cluster re-tagged from Haiku to Sonnet) feed back into the tiering rules.
 
 agy stays useful for:
 
@@ -168,7 +168,7 @@ Not planned: a separate headless orchestrator or babysitter model (over-engineer
 
 <details><summary><b>Manual install</b></summary>
 
-1. Copy `skills/delegate` to `~/.claude/skills/delegate` and `agents/worker.md` to `~/.claude/agents/` (it is then `worker`, not `delegate:worker`: pass that as `subagent_type`, and the guard hook, which only acts on `delegate:worker`, will not apply).
+1. Copy `skills/delegate` to `~/.claude/skills/delegate` and `agents/worker.md` to `~/.claude/agents/` (it is then `worker`, not `delegate:worker`: pass that as `subagent_type`).
 2. Add the MCP server:
    ```bash
    claude mcp add --scope user delegate -- uv run --script /path/to/server/server.py
@@ -189,7 +189,7 @@ Not planned: a separate headless orchestrator or babysitter model (over-engineer
 
 <details><summary><b>Configuration & limitations</b></summary>
 
-- **`DELEGATE_HOME`**: where job metadata, briefs, guard files, agy streams and logs are kept (default `~/.local/state/delegate`). The guard hook reads the same variable.
+- **`DELEGATE_HOME`**: where job metadata, briefs, agy streams and logs are kept (default `~/.local/state/delegate`).
 - **Subagent transcripts**: the verdict reads the worker's transcript under `~/.claude/projects/*/<session>/subagents/`. Its format is not documented by Anthropic, so a Claude Code update can break edit and token attribution; the self-test covers the shape seen on 2.1.306.
 - **Platforms**: tested on macOS. Linux should work but is untested. Windows is not supported yet (`os.killpg` for agy jobs).
 - **Protected paths**: Claude Code's safety boundaries may reject worker edits inside `~/.claude/`.
@@ -199,6 +199,6 @@ Not planned: a separate headless orchestrator or babysitter model (over-engineer
 
 ---
 
-*Unofficial community project, not affiliated with or endorsed by Google or Anthropic. delegate edits agy's settings.json allow-list (agy backend), installs a PreToolUse hook that only acts on its own worker, and lets workers edit files in your working tree — review what you grant.*
+*Unofficial community project, not affiliated with or endorsed by Google or Anthropic. delegate edits agy's settings.json allow-list (agy backend), and lets workers edit files in your working tree — review what you grant.*
 
 MIT © 2026 Pranav Raut — see [LICENSE](LICENSE).

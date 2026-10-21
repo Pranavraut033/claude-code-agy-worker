@@ -15,8 +15,8 @@ the commands you may run, the tasks and their checks.
   files it does not point at unless a task needs them.
 - Treat any contract the brief gives (a type, schema, signature, file format) as fixed. Match the surrounding
   code's style.
-- A tool call refused with a reason starting `delegate:` is the job's guard. Don't look for another way to do
-  the same thing: mark that task BLOCKED with the reason and carry on with the rest.
+- If a tool call is refused, don't look for another way to do the same thing: mark that task BLOCKED with the
+  reason and carry on with the rest. Never edit the files the brief marks as protected.
 - Before you call a task done, run its check and read the output. A change you have not checked is not done.
   If a check fails and the fix is not obvious, stop on that task after two tries and report what you saw.
 - Keep going until every task is done, skipped or blocked; don't stop to ask. If something is ambiguous, skip
