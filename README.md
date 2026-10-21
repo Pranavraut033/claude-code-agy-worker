@@ -154,7 +154,7 @@ Per fresh run, agy **still costs** Claude tokens: the setup outweighs the job, a
 
 ## 🧭 Status and next steps
 
-**v0.6.0** adds Claude Code subagent workers and makes them the default. The agy benchmarks above showed that the worker's price was never the issue: the orchestrator's calls were. So 0.6 keeps Claude's side to a handful of calls (a brief, a spawn, a verdict) and moves the reading and editing into a worker with its own small context, on the cheapest model that finishes. The subagent backend has passed the self-test and a live smoke test, not a benchmark; the `--usage` log is how real misses (a cluster re-tagged from Haiku to Sonnet) feed back into the tiering rules.
+**v0.6.0** adds Claude Code subagent workers and makes them the default. The agy benchmarks above showed that the worker's price was never the issue: the orchestrator's calls were. So 0.6 keeps Claude's side to a handful of calls (a brief, a spawn, a verdict) and moves the reading and editing into a worker with its own small context, on the cheapest model that finishes. The subagent backend has passed the self-test (a live run is the next check), not a benchmark; the `--usage` log is how real misses (a cluster re-tagged from Haiku to Sonnet) feed back into the tiering rules.
 
 agy stays useful for:
 
